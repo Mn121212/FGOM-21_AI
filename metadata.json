@@ -1,0 +1,6 @@
+{
+  "name": "FGOM21 AI",
+  "description": "منصة محادثة ذكية متخصصة في البرمجة وتطوير البرمجيات للمبرمجين العرب مع تحليل الملفات ووضع المطور.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
