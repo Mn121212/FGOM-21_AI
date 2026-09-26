@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="50%" stop-color="#0d9488"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Background squircle -->
+  <rect width="64" height="64" rx="16" fill="#09090b"/>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#brandGrad)"/>
+  <rect x="2" y="2" width="60" height="30" rx="14" fill="url(#glowGrad)"/>
+  
+  <!-- Terminal Prompt Icon: >_ -->
+  <path d="M18 20 L30 32 L18 44" fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="36" y1="44" x2="48" y2="44" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
+</svg>
