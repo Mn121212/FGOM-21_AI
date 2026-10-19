@@ -1,21 +1,26 @@
 import React, { useState } from "react";
-import { Check, Copy, Download, Code2 } from "lucide-react";
+import { Check, Copy, Download, Code2, Play, ShieldAlert } from "lucide-react";
 import { ChatFontSize } from "../types";
 
 interface CodeBlockProps {
   language?: string;
   value: string;
   fontSize?: ChatFontSize;
+  onRunInSandbox?: (code: string, language: string) => void;
+  onAuditSecurity?: (code: string, language: string) => void;
 }
 
 export const CodeBlock: React.FC<CodeBlockProps> = ({
   language = "plaintext",
   value,
   fontSize = "large",
+  onRunInSandbox,
+  onAuditSecurity,
 }) => {
   const [copied, setCopied] = useState(false);
 
   const cleanLang = language.replace(/^language-/, "").toLowerCase() || "code";
+  const isRunnable = ["html", "css", "javascript", "js", "typescript", "ts", "jsx", "tsx"].includes(cleanLang);
 
   const handleCopy = async () => {
     try {
@@ -72,18 +77,44 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5" dir="ltr">
+          {/* Live Runner Button */}
+          {isRunnable && onRunInSandbox && (
+            <button
+              type="button"
+              onClick={() => onRunInSandbox(value, cleanLang)}
+              title="تشغيل وتجربة الكود في استوديو الأكواد الحي"
+              className="flex items-center gap-1 px-2.5 py-1 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 rounded-md transition-colors font-sans text-xs cursor-pointer"
+            >
+              <Play className="w-3 h-3 fill-current" />
+              <span>تشغيل الكود</span>
+            </button>
+          )}
+
+          {/* Security Audit Button */}
+          {onAuditSecurity && (
+            <button
+              type="button"
+              onClick={() => onAuditSecurity(value, cleanLang)}
+              title="فحص أمان وثغرات هذا الكود (OWASP Scanner)"
+              className="flex items-center gap-1 px-2.5 py-1 bg-red-950/40 hover:bg-red-900/40 border border-red-500/30 text-red-300 rounded-md transition-colors font-sans text-xs cursor-pointer"
+            >
+              <ShieldAlert className="w-3 h-3" />
+              <span>فحص الأمان</span>
+            </button>
+          )}
+
           <button
             id="download-code-btn"
             onClick={handleDownload}
             title="تحميل كملف"
-            className="p-1.5 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 rounded-md transition-colors"
+            className="p-1.5 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 rounded-md transition-colors cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" />
           </button>
           <button
             id="copy-code-btn"
             onClick={handleCopy}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-neutral-800/80 hover:bg-neutral-700/80 text-neutral-200 rounded-md transition-colors font-sans text-xs"
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-neutral-800/80 hover:bg-neutral-700/80 text-neutral-200 rounded-md transition-colors font-sans text-xs cursor-pointer"
           >
             {copied ? (
               <>

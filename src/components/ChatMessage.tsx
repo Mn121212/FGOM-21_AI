@@ -9,12 +9,16 @@ interface ChatMessageProps {
   message: ChatMessageType;
   onRegenerate?: () => void;
   fontSize?: ChatFontSize;
+  onRunInSandbox?: (code: string, language: string) => void;
+  onAuditSecurity?: (code: string, language: string) => void;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
   message,
   onRegenerate,
   fontSize = "large",
+  onRunInSandbox,
+  onAuditSecurity,
 }) => {
   const [copied, setCopied] = useState(false);
   const isAssistant = message.role === "assistant";
@@ -158,6 +162,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                         language={match ? match[1] : "plaintext"}
                         value={codeString}
                         fontSize={fontSize}
+                        onRunInSandbox={onRunInSandbox}
+                        onAuditSecurity={onAuditSecurity}
                       />
                     );
                   }

@@ -12,6 +12,11 @@ import {
   Terminal,
   Shield,
   Layers,
+  Play,
+  Bot,
+  ShieldAlert,
+  GitBranch,
+  Languages,
 } from "lucide-react";
 import { ChatSession } from "../types";
 import { exportSessionMarkdown } from "../utils/storage";
@@ -27,6 +32,11 @@ interface SidebarProps {
   onOpenSettings: () => void;
   isOpen: boolean;
   onClose: () => void;
+  onOpenSandbox?: () => void;
+  onOpenAgent?: () => void;
+  onOpenSecurity?: () => void;
+  onOpenGitHub?: () => void;
+  onOpenGuide?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -40,6 +50,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSettings,
   isOpen,
   onClose,
+  onOpenSandbox,
+  onOpenAgent,
+  onOpenSecurity,
+  onOpenGitHub,
+  onOpenGuide,
 }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -123,14 +138,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-neutral-900 text-neutral-400 hover:text-neutral-200 lg:hidden"
+            className="p-1.5 rounded-lg hover:bg-neutral-900 text-neutral-400 hover:text-neutral-200 lg:hidden cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* New Chat Button */}
-        <div className="p-3">
+        <div className="p-3 pb-2 space-y-2">
           <button
             id="new-chat-btn"
             type="button"
@@ -143,6 +158,66 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Plus className="w-4 h-4 stroke-[2.5]" />
             <span>محادثة برمجية جديدة</span>
           </button>
+
+          {/* 4 Core Tools Hub Grid */}
+          <div className="grid grid-cols-2 gap-1.5 pt-1">
+            {onOpenSandbox && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenSandbox();
+                  if (window.innerWidth < 1024) onClose();
+                }}
+                className="flex items-center gap-1.5 p-2 rounded-xl bg-neutral-900/90 hover:bg-neutral-850 border border-neutral-800 text-emerald-300 text-xs font-medium transition-colors cursor-pointer"
+                title="استوديو تشغيل ومعاينة الأكواد الحية: اختيار لغة البرمجة وتشغيل ومعاينة فورية لايف"
+              >
+                <Play className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="truncate">استوديو الأكواد</span>
+              </button>
+            )}
+
+            {onOpenAgent && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenAgent();
+                  if (window.innerWidth < 1024) onClose();
+                }}
+                className="flex items-center gap-1.5 p-2 rounded-xl bg-neutral-900/90 hover:bg-neutral-850 border border-neutral-800 text-teal-300 text-xs font-medium transition-colors cursor-pointer"
+              >
+                <Bot className="w-3.5 h-3.5 text-teal-400" />
+                <span className="truncate">الوكيل الذاتي</span>
+              </button>
+            )}
+
+            {onOpenSecurity && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenSecurity();
+                  if (window.innerWidth < 1024) onClose();
+                }}
+                className="flex items-center gap-1.5 p-2 rounded-xl bg-neutral-900/90 hover:bg-neutral-850 border border-neutral-800 text-red-300 text-xs font-medium transition-colors cursor-pointer"
+              >
+                <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
+                <span className="truncate">فاحص الأمان</span>
+              </button>
+            )}
+
+            {onOpenGitHub && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenGitHub();
+                  if (window.innerWidth < 1024) onClose();
+                }}
+                className="flex items-center gap-1.5 p-2 rounded-xl bg-neutral-900/90 hover:bg-neutral-850 border border-neutral-800 text-blue-300 text-xs font-medium transition-colors cursor-pointer"
+              >
+                <GitBranch className="w-3.5 h-3.5 text-blue-400" />
+                <span className="truncate">مستودع GitHub</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Search Chats */}
@@ -310,6 +385,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Footer Area */}
         <div className="p-3 border-t border-neutral-800/80 bg-neutral-950/90 space-y-2">
+
+
           <button
             type="button"
             onClick={onOpenSettings}

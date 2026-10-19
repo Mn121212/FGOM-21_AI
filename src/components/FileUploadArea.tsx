@@ -76,13 +76,13 @@ export const FileUploadArea: React.FC<FileUploadAreaProps> = ({
 
   return (
     <div className="w-full space-y-2">
-      {/* Hidden file input */}
+      {/* Hidden file input supporting code and images */}
       <input
         ref={fileInputRef}
         type="file"
         multiple
         className="hidden"
-        accept=".py,.js,.jsx,.ts,.tsx,.html,.css,.scss,.json,.sql,.cpp,.c,.h,.hpp,.java,.go,.rs,.php,.rb,.sh,.yaml,.yml,.md,.txt"
+        accept=".png,.jpg,.jpeg,.webp,.gif,.svg,.py,.js,.jsx,.ts,.tsx,.html,.css,.scss,.json,.sql,.cpp,.c,.h,.hpp,.java,.go,.rs,.php,.rb,.sh,.yaml,.yml,.md,.txt,image/*"
         onChange={(e) => {
           handleFilesSelected(e.target.files);
           e.target.value = "";
@@ -105,11 +105,11 @@ export const FileUploadArea: React.FC<FileUploadAreaProps> = ({
           <div className="flex items-center gap-2">
             <Upload className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>
-              إرفاق ملفات برمجية لتحليلها (حتى 5 ملفات: Python, JS, TS, HTML, SQL...)
+              إرفاق صور تصاميم أو ملفات برمجية (PNG, JPG, JS, HTML, Python...)
             </span>
           </div>
           <span className="text-[11px] bg-neutral-800 px-2 py-0.5 rounded text-neutral-400">
-            سحب وإفلات أو انقر
+            انقر لرفع صورة أو كود
           </span>
         </div>
       ) : (
@@ -148,14 +148,22 @@ export const FileUploadArea: React.FC<FileUploadAreaProps> = ({
               >
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <div className="p-1.5 rounded bg-emerald-500/10 text-emerald-400 shrink-0">
-                    <FileCode className="w-3.5 h-3.5" />
+                    {file.isImage && file.dataUrl ? (
+                      <img
+                        src={file.dataUrl}
+                        alt={file.name}
+                        className="w-6 h-6 object-cover rounded border border-emerald-500/40"
+                      />
+                    ) : (
+                      <FileCode className="w-3.5 h-3.5" />
+                    )}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="font-mono text-neutral-200 truncate text-[11px] font-medium" title={file.name}>
                       {file.name}
                     </p>
                     <p className="text-[10px] text-neutral-500 font-mono">
-                      {file.language.toUpperCase()} • {file.lines} سطر • {formatFileSize(file.size)}
+                      {file.isImage ? "صورة تصميم (Image)" : `${file.language.toUpperCase()} • ${file.lines} سطر`} • {formatFileSize(file.size)}
                     </p>
                   </div>
                 </div>

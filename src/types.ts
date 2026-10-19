@@ -5,6 +5,9 @@ export interface CodeFile {
   size: number;
   lines: number;
   language: string;
+  isImage?: boolean;
+  dataUrl?: string;
+  mimeType?: string;
 }
 
 export interface ChatMessage {

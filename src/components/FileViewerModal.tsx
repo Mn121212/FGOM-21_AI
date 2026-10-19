@@ -77,18 +77,31 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({ file, onClose 
           </div>
         </div>
 
-        {/* Code Content */}
+        {/* File Content / Image Preview */}
         <div className="flex-1 overflow-auto p-4 bg-neutral-950 font-mono text-xs sm:text-sm leading-relaxed" dir="ltr">
-          <div className="flex">
-            <div className="select-none pr-4 mr-4 border-r border-neutral-800 text-neutral-600 text-right min-w-[2.5rem]">
-              {lines.map((_, i) => (
-                <div key={i}>{i + 1}</div>
-              ))}
+          {file.isImage && file.dataUrl ? (
+            <div className="w-full h-full flex flex-col items-center justify-center p-4">
+              <img
+                src={file.dataUrl}
+                alt={file.name}
+                className="max-h-[60vh] max-w-full object-contain rounded-xl border border-neutral-800 shadow-2xl"
+              />
+              <p className="mt-3 text-xs text-neutral-400 font-sans" dir="rtl">
+                سيقوم الذكاء الاصطناعي بتحليل هذه الصورة وتوليد الكود والتصميم المطابق لها بدقة.
+              </p>
             </div>
-            <div className="text-neutral-200 flex-1 whitespace-pre">
-              {file.content}
+          ) : (
+            <div className="flex">
+              <div className="select-none pr-4 mr-4 border-r border-neutral-800 text-neutral-600 text-right min-w-[2.5rem]">
+                {lines.map((_, i) => (
+                  <div key={i}>{i + 1}</div>
+                ))}
+              </div>
+              <div className="text-neutral-200 flex-1 whitespace-pre">
+                {file.content}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

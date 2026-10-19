@@ -34,6 +34,12 @@ import { FileUploadArea } from "./components/FileUploadArea";
 import { FileViewerModal } from "./components/FileViewerModal";
 import { PromptSuggestions } from "./components/PromptSuggestions";
 import { SettingsModal } from "./components/SettingsModal";
+import { CodeSandboxModal } from "./components/CodeSandboxModal";
+import { AutonomousAgentModal } from "./components/AutonomousAgentModal";
+import { SecurityAuditModal } from "./components/SecurityAuditModal";
+import { GitHubInspectorModal } from "./components/GitHubInspectorModal";
+import { SplashScreen } from "./components/SplashScreen";
+import { OnboardingGuideModal } from "./components/OnboardingGuideModal";
 import { AI_PROVIDERS } from "./data/providers";
 
 const DEFAULT_MODELS: ModelInfo[] = [
@@ -106,10 +112,40 @@ export default function App() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  // ⚡ 4 Core Feature Modals State:
+  const [sandboxOpen, setSandboxOpen] = useState(false);
+  const [sandboxInitialCode, setSandboxInitialCode] = useState<{ html?: string; css?: string; js?: string }>({});
+  const [agentModalOpen, setAgentModalOpen] = useState(false);
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
+  const [githubModalOpen, setGithubModalOpen] = useState(false);
+  const [guideModalOpen, setGuideModalOpen] = useState(false);
+  const [showSplash, setShowSplash] = useState(() => {
+    try {
+      return !sessionStorage.getItem("fgom21_splash_viewed");
+    } catch (_) {
+      return false;
+    }
+  });
+
   const [healthStatus, setHealthStatus] = useState<{
     hasGeminiKey: boolean;
     hasCloudflareKey: boolean;
   } | null>(null);
+
+  // Auto-launch platform guide for first-time visitors
+  useEffect(() => {
+    try {
+      const guideSeen = localStorage.getItem("fgom21_guide_seen");
+      if (!guideSeen) {
+        const timer = setTimeout(() => {
+          setGuideModalOpen(true);
+        }, 2200);
+        return () => clearTimeout(timer);
+      }
+    } catch (_) {}
+  }, []);
 
   // List of AI keys that the user has entered in settings
   const enteredAIKeys = useMemo(() => {
@@ -189,6 +225,7 @@ export default function App() {
     return list;
   }, [settings.apiKeys, settings.cfApiToken, settings.selectedProvider]);
 
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -222,7 +259,10 @@ export default function App() {
           hasCloudflareKey: Boolean(data?.hasCloudflareKey),
         });
       })
-      .catch((err) => console.warn("Could not check health:", err));
+      .catch((err) => console.warn("Could not check health:", err))
+      .finally(() => {
+        setTimeout(() => setIsInitialLoading(false), 900);
+      });
   }, []);
 
   // Auto-resize textarea
@@ -420,6 +460,9 @@ export default function App() {
             content: f.content,
             size: f.size,
             type: f.language,
+            isImage: f.isImage,
+            dataUrl: f.dataUrl,
+            mimeType: f.mimeType,
           })),
         }),
         signal: abortControllerRef.current.signal,
@@ -436,9 +479,61 @@ export default function App() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
-      let accumulatedReply = "";
       let buffer = "";
       let hasReceivedError = false;
+      let finalModelName = "";
+
+      // ✍️ Smooth Typewriter Character Queue (حرف حرف بسلاسة واحترافية)
+      const charQueue: string[] = [];
+      let displayedContent = "";
+      let isNetworkStreamDone = false;
+      let typewriterTimer: any = null;
+
+      const finishTypingPromise = new Promise<void>((resolve) => {
+        typewriterTimer = setInterval(() => {
+          if (abortControllerRef.current?.signal.aborted) {
+            clearInterval(typewriterTimer);
+            resolve();
+            return;
+          }
+
+          if (charQueue.length > 0) {
+            // Write letter-by-letter smoothly. Dynamically adapt if queue has a burst
+            const takeCount = charQueue.length > 120 ? 5 : charQueue.length > 40 ? 2 : 1;
+            const nextLetters = charQueue.splice(0, takeCount).join("");
+            displayedContent += nextLetters;
+
+            setSessions((prev) =>
+              prev.map((s) => {
+                if (s.id === targetSessionId) {
+                  return {
+                    ...s,
+                    messages: s.messages.map((m) =>
+                      m.id === assistantMessageId
+                        ? {
+                            ...m,
+                            content: displayedContent,
+                            isStreaming: true,
+                            modelUsed: finalModelName || m.modelUsed,
+                          }
+                        : m
+                    ),
+                  };
+                }
+                return s;
+              })
+            );
+
+            // Auto-scroll seamlessly with the typed characters
+            if (chatContainerRef.current) {
+              chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+            }
+          } else if (isNetworkStreamDone) {
+            clearInterval(typewriterTimer);
+            resolve();
+          }
+        }, 16); // ~60fps smooth letter-by-letter typewriter pace
+      });
 
       while (true) {
         const { value, done } = await reader.read();
@@ -460,33 +555,17 @@ export default function App() {
           try {
             const parsed = JSON.parse(dataStr);
             if (parsed.error) {
-              accumulatedReply = `⚠️ ${parsed.error}`;
+              displayedContent = `⚠️ ${parsed.error}`;
+              charQueue.length = 0;
               hasReceivedError = true;
               break;
             }
             if (parsed.text) {
-              accumulatedReply += parsed.text;
-              const modelFromStream = parsed.modelUsed;
-              setSessions((prev) =>
-                prev.map((s) => {
-                  if (s.id === targetSessionId) {
-                    return {
-                      ...s,
-                      messages: s.messages.map((m) =>
-                        m.id === assistantMessageId
-                          ? {
-                              ...m,
-                              content: accumulatedReply,
-                              isStreaming: true,
-                              modelUsed: modelFromStream || m.modelUsed,
-                            }
-                          : m
-                      ),
-                    };
-                  }
-                  return s;
-                })
-              );
+              if (parsed.modelUsed) finalModelName = parsed.modelUsed;
+              // Push characters into typewriter queue for natural smooth typing
+              for (let i = 0; i < parsed.text.length; i++) {
+                charQueue.push(parsed.text[i]);
+              }
             }
           } catch (e) {
             // non-json chunk
@@ -498,7 +577,11 @@ export default function App() {
         }
       }
 
-      // Mark streaming as finished
+      // Mark network stream done and wait for remaining queued characters to type out smoothly
+      isNetworkStreamDone = true;
+      await finishTypingPromise;
+
+      // Mark streaming as completed
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id === targetSessionId) {
@@ -509,10 +592,11 @@ export default function App() {
                   ? {
                       ...m,
                       content:
-                        accumulatedReply ||
+                        displayedContent ||
                         "تمت معالجة الطلب ولكن لم يتم إرجاع نص كافٍ.",
                       isStreaming: false,
                       error: hasReceivedError,
+                      modelUsed: finalModelName || m.modelUsed,
                     }
                   : m
               ),
@@ -595,7 +679,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100 font-sans" dir="rtl">
+    <div className="flex h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100 font-sans relative" dir="rtl">
       {/* Sidebar with Chat Sessions */}
       <Sidebar
         sessions={sessions}
@@ -608,6 +692,11 @@ export default function App() {
         onOpenSettings={() => setSettingsModalOpen(true)}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onOpenSandbox={() => setSandboxOpen(true)}
+        onOpenAgent={() => setAgentModalOpen(true)}
+        onOpenSecurity={() => setSecurityModalOpen(true)}
+        onOpenGitHub={() => setGithubModalOpen(true)}
+        onOpenGuide={() => setGuideModalOpen(true)}
       />
 
       {/* Main Chat Workspace */}
@@ -627,6 +716,7 @@ export default function App() {
           fontSize={fontSize}
           onChangeFontSize={handleFontSizeChange}
           onOpenSettings={() => setSettingsModalOpen(true)}
+          onOpenGuide={() => setGuideModalOpen(true)}
           activeProviderName={
             AI_PROVIDERS.find((p) => p.id === settings.selectedProvider)?.name || "المحرك المدمج"
           }
@@ -654,7 +744,7 @@ export default function App() {
         )}
 
         {/* Chat Messages or Prompt Suggestions */}
-        <div className="flex-1 overflow-y-auto">
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto">
           {messages.length === 0 ? (
             <div className="min-h-full flex flex-col justify-center py-8">
               <PromptSuggestions
@@ -673,6 +763,23 @@ export default function App() {
                     key={message.id}
                     message={message}
                     fontSize={fontSize}
+                    onRunInSandbox={(code, lang) => {
+                      if (lang === "css") {
+                        setSandboxInitialCode({ html: `<div class="card">اختبار تنسيق CSS</div>`, css: code, js: "" });
+                      } else if (lang === "javascript" || lang === "js" || lang === "ts") {
+                        setSandboxInitialCode({
+                          html: `<div id="app"></div>`,
+                          css: `body { background: #0a0a0a; color: #fff; font-family: sans-serif; padding: 2rem; direction: rtl; }`,
+                          js: code,
+                        });
+                      } else {
+                        setSandboxInitialCode({ html: code, css: "", js: "" });
+                      }
+                      setSandboxOpen(true);
+                    }}
+                    onAuditSecurity={() => {
+                      setSecurityModalOpen(true);
+                    }}
                     onRegenerate={
                       isLast && message.role === "assistant" && !isLoading
                         ? handleRegenerate
@@ -845,6 +952,76 @@ export default function App() {
         models={models}
         healthStatus={healthStatus}
       />
+
+      {/* 1. ⚡ Live Code Sandbox & VS Code Runner Studio (Option 1) */}
+      <CodeSandboxModal
+        isOpen={sandboxOpen}
+        onClose={() => setSandboxOpen(false)}
+        initialHtml={sandboxInitialCode.html}
+        initialCss={sandboxInitialCode.css}
+        initialJs={sandboxInitialCode.js}
+        onSendToChat={(prompt) => {
+          handleSendMessage(prompt);
+        }}
+      />
+
+      {/* 2. 🤖 Autonomous AI Coding Agent Modal */}
+      <AutonomousAgentModal
+        isOpen={agentModalOpen}
+        onClose={() => setAgentModalOpen(false)}
+        onOpenInSandbox={(html, css, js) => {
+          setSandboxInitialCode({ html, css, js });
+          setSandboxOpen(true);
+        }}
+        onSendToChat={(prompt) => {
+          handleSendMessage(prompt);
+        }}
+      />
+
+      {/* 3. 🛡️ AI Security Audit & Bug Scanner Modal */}
+      <SecurityAuditModal
+        isOpen={securityModalOpen}
+        onClose={() => setSecurityModalOpen(false)}
+        onApplyFixedCode={(code) => {
+          setInputPrompt((prev) => (prev ? `${prev}\n\n${code}` : code));
+        }}
+        onOpenSandboxWithCode={(code) => {
+          setSandboxInitialCode({ html: code });
+          setSandboxOpen(true);
+        }}
+      />
+
+      {/* 4. 🐙 GitHub Repository Inspector & Chat Modal */}
+      <GitHubInspectorModal
+        isOpen={githubModalOpen}
+        onClose={() => setGithubModalOpen(false)}
+        onStartRepoChat={(repo, prompt) => {
+          handleSendMessage(prompt);
+        }}
+      />
+
+      {/* 5. 🧭 Onboarding Guide Modal (Explaining What Every Button Does) */}
+      <OnboardingGuideModal
+        isOpen={guideModalOpen}
+        onClose={() => setGuideModalOpen(false)}
+        onOpenSandbox={() => setSandboxOpen(true)}
+        onOpenAgent={() => setAgentModalOpen(true)}
+        onOpenSecurity={() => setSecurityModalOpen(true)}
+        onOpenGitHub={() => setGithubModalOpen(true)}
+        onOpenSettings={() => setSettingsModalOpen(true)}
+      />
+
+      {/* 6. 🚀 Cyber Splash Screen Loader */}
+      {showSplash && (
+        <SplashScreen
+          onFinish={() => {
+            setShowSplash(false);
+            try {
+              sessionStorage.setItem("fgom21_splash_viewed", "true");
+            } catch (_) {}
+          }}
+        />
+      )}
     </div>
   );
 }
