@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { ModelInfo, ChatFontSize } from "../types";
+import { BrandLogo } from "./BrandLogo";
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -62,7 +63,8 @@ export const Header: React.FC<HeaderProps> = ({
 
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="font-bold text-sm sm:text-base text-neutral-100 truncate max-w-[200px] sm:max-w-xs md:max-w-md">
+            <BrandLogo size="sm" />
+            <h1 className="font-bold text-sm sm:text-base text-neutral-100 truncate max-w-[180px] sm:max-w-xs md:max-w-md">
               {chatTitle || "محادثة برمجية جديدة"}
             </h1>
           </div>

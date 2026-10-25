@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { Copy, Check, Terminal, User, FileCode, RotateCcw, Cpu, ShieldCheck } from "lucide-react";
 import { ChatMessage as ChatMessageType, ChatFontSize } from "../types";
 import { CodeBlock } from "./CodeBlock";
+import { BrandLogo } from "./BrandLogo";
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -87,9 +88,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
         {/* Avatar */}
         <div className="shrink-0 pt-0.5">
           {isAssistant ? (
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-white shadow-md shadow-emerald-950/50">
-              <Terminal className="w-5 h-5" />
-            </div>
+            <BrandLogo size="md" />
           ) : (
             <div className="w-9 h-9 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-neutral-200">
               <User className="w-5 h-5" />
@@ -274,3 +273,4 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     </div>
   );
 };
+

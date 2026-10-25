@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
+  Rocket,
 } from "lucide-react";
 
 interface OnboardingGuideModalProps {
@@ -23,6 +24,7 @@ interface OnboardingGuideModalProps {
   onOpenAgent?: () => void;
   onOpenSecurity?: () => void;
   onOpenGitHub?: () => void;
+  onOpenDeployments?: () => void;
   onOpenSettings?: () => void;
 }
 
@@ -33,6 +35,7 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
   onOpenAgent,
   onOpenSecurity,
   onOpenGitHub,
+  onOpenDeployments,
   onOpenSettings,
 }) => {
   const [activeStep, setActiveStep] = useState(0);
@@ -144,6 +147,21 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
         onOpenSettings?.();
       },
       tip: "مفاتيحك تحفظ محلياً فقط في متصفحك ولا يتم مشاركتها أبداً.",
+    },
+    {
+      id: "deployments",
+      title: "9. مساحة النشر وربط قواعد البيانات",
+      icon: Rocket,
+      color: "violet",
+      badge: "المشاريع والحسابات السحابية",
+      description:
+        "أضف مشاريع GitHub متعددة، واربط حسابات منصات الاستضافة وقواعد البيانات في مساحة منفصلة لكل مستخدم. بيانات ربط الخدمات تُحفظ مشفّرة على الخادم.",
+      actionLabel: "فتح مساحة النشر",
+      action: () => {
+        onClose();
+        onOpenDeployments?.();
+      },
+      tip: "يحتاج هذا القسم إلى إعداد Supabase للمنصة وتفعيل تكاملات مزوّدي الخدمات قبل تنفيذ عمليات النشر وإنشاء قواعد البيانات.",
     },
   ];
 

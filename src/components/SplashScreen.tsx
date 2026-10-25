@@ -1,14 +1,20 @@
-import React, { useEffect, useState } from "react";
-import { Terminal, Cpu, Sparkles, CheckCircle2, ShieldCheck, Code2 } from "lucide-react";
+import React, { useEffect, useState, useRef } from "react";
+import { Terminal, Cpu, Sparkles, ShieldCheck, Code2 } from "lucide-react";
+import { BrandLogo } from "./BrandLogo";
 
 interface SplashScreenProps {
   onFinish: () => void;
 }
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
-  const [progress, setProgress] = useState(10);
+  const [progress, setProgress] = useState(15);
   const [currentStep, setCurrentStep] = useState(0);
   const [isFadingOut, setIsFadingOut] = useState(false);
+
+  const onFinishRef = useRef(onFinish);
+  useEffect(() => {
+    onFinishRef.current = onFinish;
+  }, [onFinish]);
 
   const steps = [
     "تهيئة بيئة البرمجة الذكية وتطوير الواجهات...",
@@ -19,27 +25,27 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
 
   useEffect(() => {
     const timer1 = setTimeout(() => {
-      setProgress(40);
+      setProgress(45);
       setCurrentStep(1);
-    }, 350);
+    }, 200);
 
     const timer2 = setTimeout(() => {
-      setProgress(75);
+      setProgress(80);
       setCurrentStep(2);
-    }, 750);
+    }, 450);
 
     const timer3 = setTimeout(() => {
       setProgress(100);
       setCurrentStep(3);
-    }, 1150);
+    }, 700);
 
     const timer4 = setTimeout(() => {
       setIsFadingOut(true);
-    }, 1500);
+    }, 900);
 
     const timer5 = setTimeout(() => {
-      onFinish();
-    }, 1850);
+      onFinishRef.current();
+    }, 1100);
 
     return () => {
       clearTimeout(timer1);
@@ -48,12 +54,19 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
       clearTimeout(timer4);
       clearTimeout(timer5);
     };
-  }, [onFinish]);
+  }, []); // Run once on mount!
+
+  const handleSkip = () => {
+    setIsFadingOut(true);
+    setTimeout(() => {
+      onFinishRef.current();
+    }, 150);
+  };
 
   return (
     <div
       dir="rtl"
-      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-neutral-950 text-neutral-100 transition-opacity duration-300 ${
+      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-neutral-950 text-neutral-100 transition-opacity duration-200 ${
         isFadingOut ? "opacity-0 pointer-events-none" : "opacity-100"
       }`}
     >
@@ -63,7 +76,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
       <div className="relative z-10 flex flex-col items-center max-w-md w-full px-6 text-right">
         {/* Brand Icon */}
         <div className="relative mb-6">
-          <div className="w-20 h-20 rounded-3xl bg-gradient-to-tr from-emerald-600 via-emerald-500 to-teal-400 p-0.5 shadow-2xl shadow-emerald-950 flex items-center justify-center animate-pulse">
+          <BrandLogo size="xl" />
+          <div className="hidden">
             <div className="w-full h-full bg-neutral-950 rounded-[22px] flex items-center justify-center text-emerald-400">
               <Terminal className="w-10 h-10" />
             </div>
@@ -84,7 +98,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
         {/* Loading Progress Bar */}
         <div className="w-full bg-neutral-900 border border-neutral-800 rounded-full h-2 overflow-hidden mb-3 p-0.5 shadow-inner">
           <div
-            className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-300 ease-out"
+            className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-200 ease-out"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -113,13 +127,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
           </span>
         </div>
 
-        {/* Skip button if user doesn't want to wait */}
+        {/* Skip button */}
         <button
           type="button"
-          onClick={() => {
-            setIsFadingOut(true);
-            setTimeout(onFinish, 200);
-          }}
+          onClick={handleSkip}
           className="mt-8 text-xs text-neutral-500 hover:text-neutral-300 underline cursor-pointer"
         >
           تخطي شاشة التحميل والدخول المباشر

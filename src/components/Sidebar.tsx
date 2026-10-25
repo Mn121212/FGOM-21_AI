@@ -17,6 +17,7 @@ import {
   ShieldAlert,
   GitBranch,
   Languages,
+  Rocket,
 } from "lucide-react";
 import { ChatSession } from "../types";
 import { exportSessionMarkdown } from "../utils/storage";
@@ -36,6 +37,7 @@ interface SidebarProps {
   onOpenAgent?: () => void;
   onOpenSecurity?: () => void;
   onOpenGitHub?: () => void;
+  onOpenDeployments?: () => void;
   onOpenGuide?: () => void;
 }
 
@@ -54,6 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAgent,
   onOpenSecurity,
   onOpenGitHub,
+  onOpenDeployments,
   onOpenGuide,
 }) => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -215,6 +218,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <GitBranch className="w-3.5 h-3.5 text-blue-400" />
                 <span className="truncate">مستودع GitHub</span>
+              </button>
+            )}
+
+            {onOpenDeployments && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenDeployments();
+                  if (window.innerWidth < 1024) onClose();
+                }}
+                className="flex items-center gap-1.5 p-2 rounded-xl bg-neutral-900/90 hover:bg-neutral-850 border border-neutral-800 text-violet-300 text-xs font-medium transition-colors cursor-pointer"
+                title="إدارة المشاريع والنشر وربط قواعد البيانات"
+              >
+                <Rocket className="w-3.5 h-3.5 text-violet-400" />
+                <span className="truncate">النشر وقواعد البيانات</span>
               </button>
             )}
           </div>

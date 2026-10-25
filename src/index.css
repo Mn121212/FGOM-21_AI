@@ -1,27 +1,291 @@
 @import "tailwindcss";
 
+/* =============================================================
+   FGOM21 AI - Global Professional Stylesheet
+   Full RTL, Typography, Responsive Media Queries & Mobile Fixes
+   ============================================================= */
+
 @layer base {
-  body {
-    font-family: 'Cairo', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  /* 1. Global Reset & Box-Sizing for all devices */
+  *, ::before, ::after {
+    letter-spacing: normal !important;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
   }
-  
+
+  /* 2. Full Viewport & Safe Area handling for all Smartphones & Devices */
+  html {
+    font-family: 'Cairo', 'Tajawal', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: normal !important;
+    direction: rtl;
+    text-align: right;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+    overflow-x: hidden;
+    width: 100%;
+    height: 100%;
+  }
+
+  body {
+    font-family: 'Cairo', 'Tajawal', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: normal !important;
+    direction: rtl;
+    text-align: right;
+    background-color: #0d1117;
+    color: #f3f4f6;
+    min-height: 100vh;
+    min-height: -webkit-fill-available;
+    width: 100%;
+    overflow-x: hidden;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* 3. Enforce Cairo / Tajawal on interactive UI components */
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  h1, h2, h3, h4, h5, h6,
+  span,
+  p,
+  label,
+  div,
+  [class*="tracking-"] {
+    letter-spacing: normal !important;
+  }
+
+  /* 4. Buttons, Touch Targets & Cards Optimizations */
+  button, .btn, a {
+    font-family: 'Cairo', 'Tajawal', system-ui, sans-serif;
+    font-weight: 600 !important;
+    letter-spacing: normal !important;
+    line-height: 1.5;
+    touch-action: manipulation;
+    cursor: pointer;
+  }
+
+  button span, a span {
+    letter-spacing: normal !important;
+    font-weight: 600;
+  }
+
+  input, select, textarea {
+    font-size: 16px !important; /* يمنع التكبير التلقائي في الآيفون عند الكتابة */
+    font-family: 'Cairo', 'Tajawal', system-ui, sans-serif;
+  }
+
   pre, code, kbd, samp {
     font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    letter-spacing: normal;
+    direction: ltr;
+    text-align: left;
   }
 }
 
-/* Custom modern scrollbar */
+/* =============================================================
+   5. Custom Modern Neon Scrollbar
+   ============================================================= */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.2);
+  background: rgba(148, 163, 184, 0.25);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: rgba(16, 185, 129, 0.5);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* =============================================================
+   6. Custom Styled Dark Select & Dropdown Elements (Fixed Mobile Overflow)
+   ============================================================= */
+.select-container,
+.dropdown-wrapper,
+select {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+select, option {
+  direction: ltr !important;
+  text-align: right !important;
+  unicode-bidi: embed !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+select {
+  background-color: #18181c !important;
+  color: #f4f4f5 !important;
+  border: 1px solid #27272a !important;
+  border-radius: 0.75rem !important;
+  padding: 0.65rem 0.85rem !important;
+  padding-right: 2.2rem !important; /* مساحة للسهم في الجهة اليمنى */
+  padding-left: 1rem !important;
+  font-family: 'Cairo', 'Tajawal', sans-serif !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300E676' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 0.75rem center !important;
+  background-size: 1.1em !important;
+  width: 100% !important;
+}
+
+select option {
+  background-color: #18181c !important;
+  color: #f4f4f5 !important;
+  padding: 12px 14px !important;
+  font-family: 'Cairo', 'Tajawal', sans-serif !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  direction: ltr !important;
+  text-align: right !important;
+  unicode-bidi: embed !important;
+  line-height: 2 !important;
+  max-width: 100% !important;
+}
+
+select option:checked,
+select option:hover {
+  background-color: #0c1612 !important;
+  color: #00E676 !important;
+}
+
+/* إصلاح القوائم المنسدلة والعناصر المنبثقة على الجوال لتستقر مركزياً داخل حدود الشاشة */
+@media (max-width: 768px) {
+  ul.dropdown-menu,
+  .model-select-dropdown,
+  .dropdown-menu-container {
+    position: absolute !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%) !important;
+    width: 90vw !important;
+    max-width: 340px !important;
+    box-sizing: border-box !important;
+    border-radius: 12px !important;
+    overflow: hidden !important;
+    z-index: 9999 !important;
+  }
+}
+
+/* Prevent Tab & Button Text Truncation */
+button span,
+a span,
+[role="tab"] span {
+  word-break: normal !important;
+  white-space: nowrap !important;
+  text-overflow: clip !important;
+}
+
+/* =============================================================
+   7. Comprehensive Responsive Media Queries (جميع الشاشات)
+   ============================================================= */
+
+/* 📱 1. الجوالات الصغيرة جداً (Very Small Mobile) */
+@media (max-width: 380px) {
+  body {
+    font-size: 12px;
+  }
+  .modal-container, .card-box {
+    padding: 0.5rem !important;
+  }
+  button, .btn {
+    padding: 0.4rem 0.6rem !important;
+    font-size: 11px !important;
+  }
+}
+
+/* 📱 2. الجوالات المتوسطة والكبيرة (Standard Mobile) */
+@media (max-width: 639px) {
+  .mobile-modal-scroll {
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .hide-on-mobile {
+    display: none !important;
+  }
+  .grid-mobile-1 {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+
+  .tab-item-mobile {
+    flex: 1 1 0% !important;
+    padding-left: 0.375rem !important;
+    padding-right: 0.375rem !important;
+    font-size: 10px !important;
+  }
+}
+
+/* 📱💻 3. الجوالات والأجهزة اللوحية (Mobile & Tablets - max-width: 1023px) */
+@media (max-width: 1023px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    right: -100%;
+    width: 280px;
+    height: 100%;
+    z-index: 50;
+    transition: right 0.3s ease-in-out;
+  }
+
+  .sidebar.active {
+    right: 0;
+  }
+
+  .main-content {
+    width: 100% !important;
+    padding: 1rem !important;
+  }
+
+  .modal-dialog {
+    width: 95% !important;
+    max-width: 100% !important;
+    margin: 0.5rem auto !important;
+  }
+}
+
+/* 💻 4. الأجهزة المكتبية والشاشات العادية (min-width: 1024px) */
+@media (min-width: 1024px) {
+  .show-on-mobile-only {
+    display: none !important;
+  }
+
+  .main-content {
+    margin-right: 280px;
+  }
+}
+
+/* 🖥️ 5. الشاشات الكبيرة جداً والعريضة (min-width: 1440px) */
+@media (min-width: 1440px) {
+  .container-xl {
+    max-width: 1400px;
+    margin-left: auto;
+    margin-right: auto;
+  }
 }

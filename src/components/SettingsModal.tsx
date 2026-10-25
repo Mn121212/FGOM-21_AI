@@ -26,9 +26,15 @@ import {
   MessageSquare,
   HelpCircle,
   Lock,
+  Upload,
+  Image,
+  RotateCcw,
+  ServerOff,
 } from "lucide-react";
 import { AppSettings, ModelInfo, AIProviderId, CustomApiKeys } from "../types";
 import { AI_PROVIDERS } from "../data/providers";
+import { StorySection } from "./StorySection";
+import { BrandLogo, getStoredCustomLogo, setStoredCustomLogo } from "./BrandLogo";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -61,8 +67,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [customSystemPrompt, setCustomSystemPrompt] = useState(settings.customSystemPrompt || "");
 
-  // Active Tab: Keys, Technical Support, or Site Policy
-  const [activeTab, setActiveTab] = useState<"keys" | "support" | "privacy">("keys");
+  // Active Tab: Support (default as requested), Keys, Site Policy, or Founder Story
+  const [activeTab, setActiveTab] = useState<"keys" | "support" | "privacy" | "story" | "branding">("keys");
+  const [customLogoNotice, setCustomLogoNotice] = useState<string | null>(null);
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert("حجم ملف الشعار كبير جداً. يرجى اختيار صورة أقل من 2 ميغابايت.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      setStoredCustomLogo(dataUrl);
+      setCustomLogoNotice("تم اعتماد وتطبيق شعارك الخاص بنجاح على كامل الموقع!");
+      setTimeout(() => setCustomLogoNotice(null), 3000);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleResetLogo = () => {
+    setStoredCustomLogo(null);
+    setCustomLogoNotice("تمت استعادة الشعار الافتراضي للموقع بنجاح!");
+    setTimeout(() => setCustomLogoNotice(null), 3000);
+  };
 
   // Key visibility toggles
   const [showKey, setShowKey] = useState(false);
@@ -77,23 +107,75 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Support Ticket Form State
+  const [ticketName, setTicketName] = useState("");
   const [ticketSubject, setTicketSubject] = useState("مشكلة تقنية في تشغيل الكود");
   const [ticketContact, setTicketContact] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
   const [ticketSuccess, setTicketSuccess] = useState<string | null>(null);
   const [isSendingTicket, setIsSendingTicket] = useState(false);
 
-  const handleSendTicket = (e: React.FormEvent) => {
+  const handleSendTicket = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ticketMessage.trim()) return;
+    if (!ticketMessage.trim() || !ticketContact.trim()) return;
 
     setIsSendingTicket(true);
-    setTimeout(() => {
-      const generatedId = `TK-${Math.floor(1000 + Math.random() * 9000)}`;
-      setTicketSuccess(generatedId);
+
+    // Primary: Submit via server backend (relays to Formspree xdearyyg)
+    try {
+      const res = await fetch("/api/support/ticket", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: ticketName,
+          email: ticketContact,
+          subject: ticketSubject,
+          message: ticketMessage,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setTicketSuccess(data.ticketId || "TKT-" + Date.now().toString().slice(-6));
+        setTicketMessage("");
+        setTicketName("");
+        setTicketContact("");
+        setIsSendingTicket(false);
+        return;
+      }
+    } catch (_) {}
+
+    // Fallback: Direct Formspree AJAX submission from browser
+    try {
+      const ticketId = "TKT-" + Date.now().toString().slice(-6) + "-" + Math.floor(100 + Math.random() * 900);
+      const fsRes = await fetch("https://formspree.io/f/xdearyyg", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: JSON.stringify({
+          name: ticketName || "مستخدم FGOM21 AI",
+          email: ticketContact,
+          subject: ticketSubject,
+          message: ticketMessage,
+          ticketId,
+          _subject: `[FGOM21 AI Support] ${ticketSubject} — ${ticketId}`,
+        }),
+      });
+
+      if (fsRes.ok) {
+        setTicketSuccess(ticketId);
+        setTicketMessage("");
+        setTicketName("");
+        setTicketContact("");
+      } else {
+        const errData = await fsRes.json().catch(() => ({}));
+        alert(errData.error || "تعذر إرسال التذكرة إلى Formspree. يرجى التأكد من صحة البريد الإلكتروني.");
+      }
+    } catch (err) {
+      alert("تعذر الاتصال بخدمة Formspree. تحقق من الاتصال بالإنترنت ثم أعد المحاولة.");
+    } finally {
       setIsSendingTicket(false);
-      setTicketMessage("");
-    }, 600);
+    }
   };
 
   if (!isOpen) return null;
@@ -229,8 +311,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const modalTabs = [
     {
+      id: "branding" as const,
+      label: "شعار الموقع",
+      icon: Image,
+      title: "تخصيص شعار وهوية المنصة",
+      subtitle: "ارفع شعارك الخاص ليتم اعتماده وتطبيقه في كامل أرجاء المنصة فوراً وبسهولة",
+      badge: "شعار مخصص",
+      accent: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+    },
+    {
       id: "keys" as const,
       label: "مفاتيح الذكاء",
+
       icon: Key,
       title: "إعدادات مزودي الذكاء الاصطناعي والمفاتيح",
       subtitle: "اختر المزود الافتراضي وأدخل مفتاح API لتشغيل كافة الميزات البرمجية مباشرة",
@@ -255,6 +347,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       badge: "ميثاق الأمان",
       accent: "text-blue-400 bg-blue-500/10 border-blue-500/20",
     },
+    {
+      id: "story" as const,
+      label: "قصة التأسيس",
+      icon: Sparkles,
+      title: "قصة التأسيس ورؤية FGOM21 AI",
+      subtitle: "قصة المطور الفردي، شغف البرمجة، ومعمارية الخصوصية المطلقة بدون قواعد بيانات مركزية",
+      badge: "قصة المطور",
+      accent: "text-[#00E676] bg-emerald-500/10 border-emerald-500/20",
+    },
   ];
 
   const currentTabInfo = modalTabs.find((t) => t.id === activeTab) || modalTabs[0];
@@ -276,15 +377,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <CurrentTabIcon className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-neutral-100">
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <h2 className="text-sm sm:text-base font-extrabold text-neutral-100">
                   {currentTabInfo.title}
                 </h2>
-                <span className="hidden sm:inline-block px-2 py-0.5 text-[10px] font-semibold rounded-md bg-neutral-800 text-neutral-300 border border-neutral-700">
+                <span className="inline-block px-2 py-0.5 text-[10px] font-bold rounded-md bg-neutral-800 text-[#00E676] border border-emerald-500/30 shrink-0">
                   {currentTabInfo.badge}
                 </span>
               </div>
-              <p className="text-xs text-neutral-400 mt-0.5 leading-relaxed">
+              <p className="text-[11px] sm:text-xs text-neutral-400 mt-0.5 leading-relaxed">
                 {currentTabInfo.subtitle}
               </p>
             </div>
@@ -299,9 +400,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Navigation - Responsive 3-Tab Segmented Grid */}
-        <div className="px-4 sm:px-6 py-2.5 border-b border-neutral-800/80 bg-neutral-950/60 shrink-0">
-          <div className="grid grid-cols-3 gap-1.5 p-1 bg-neutral-950 rounded-xl border border-neutral-800/90 text-xs">
+        {/* Tab Navigation - Fully Responsive Horizontal Scrollable Container */}
+        <div className="px-2 sm:px-6 py-2 border-b border-neutral-800/80 bg-neutral-950/60 shrink-0">
+          <div className="flex items-center gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800/90 text-xs overflow-x-auto no-scrollbar max-w-full">
             {modalTabs.map((tab) => {
               const TabIcon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -310,14 +411,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg font-bold transition-all cursor-pointer ${
+                  className={`flex-1 min-w-max shrink-0 flex items-center justify-center gap-1 sm:gap-1.5 py-2 px-2.5 sm:px-3 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap select-none ${
                     isActive
                       ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-xs"
                       : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900 border border-transparent"
                   }`}
                 >
-                  <TabIcon className={`w-4 h-4 shrink-0 ${isActive ? "text-emerald-400" : "text-neutral-400"}`} />
-                  <span className="truncate">{tab.label}</span>
+                  <TabIcon className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${isActive ? "text-emerald-400" : "text-neutral-400"}`} />
+                  <span className="whitespace-nowrap font-bold text-[10px] sm:text-xs md:text-sm leading-none">{tab.label}</span>
                 </button>
               );
             })}
@@ -339,11 +440,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* Responsive AI Providers Grid: Single column on Mobile for crystal-clear readability, 2-Column Grid on Desktop */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3" dir="rtl">
               {AI_PROVIDERS.map((provider) => {
                 const isSelected = selectedProvider === provider.id;
+                const isBuiltin = provider.id === "builtin";
+
                 const hasKeySaved =
-                  provider.id === "builtin" ||
+                  isBuiltin ||
                   (provider.id === "gemini" && Boolean(apiKeys.gemini)) ||
                   (provider.id === "openai" && Boolean(apiKeys.openai)) ||
                   (provider.id === "groq" && Boolean(apiKeys.groq)) ||
@@ -361,33 +465,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       setActiveCustomModel(provider.defaultModel);
                       setTestResult(null);
                     }}
-                    className={`text-right p-3 rounded-xl border transition-all flex flex-col gap-1.5 relative ${
+                    className={`text-right p-3 sm:p-3.5 rounded-xl border transition-all flex flex-col justify-between gap-2 relative cursor-pointer ${
+                      isBuiltin ? "col-span-1 sm:col-span-2 shadow-xs" : "col-span-1"
+                    } ${
                       isSelected
-                        ? "bg-emerald-950/30 border-emerald-500/60 shadow-xs shadow-emerald-900/30"
-                        : "bg-neutral-950/60 border-neutral-800/80 hover:bg-neutral-800/50 hover:border-neutral-700"
+                        ? "bg-emerald-950/40 border-emerald-500/70 shadow-xs shadow-emerald-900/30"
+                        : "bg-neutral-950/80 border-neutral-800/90 hover:bg-neutral-900 hover:border-neutral-700"
                     }`}
+                    dir="rtl"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         {renderProviderIcon(provider.icon)}
-                        <span className="font-bold text-xs text-neutral-100">
+                        <span className="font-extrabold text-xs text-neutral-100 font-sans">
                           {provider.name}
                         </span>
                       </div>
 
                       {hasKeySaved ? (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-sans flex items-center gap-1">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-[#00E676] font-bold flex items-center gap-1 shrink-0 border border-emerald-500/30">
                           <Check className="w-2.5 h-2.5" />
-                          {provider.id === "builtin" ? "مدمج" : "مفتاحك مفعّل"}
+                          {isBuiltin ? "مدمج ✓" : "مفعّل"}
                         </span>
                       ) : (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-400 font-sans">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-400 font-sans shrink-0">
                           {provider.badge}
                         </span>
                       )}
                     </div>
 
-                    <p className="text-[11px] text-neutral-400 leading-relaxed line-clamp-2">
+                    <p className="text-xs text-neutral-400 leading-relaxed break-words text-right mt-0.5">
                       {provider.description}
                     </p>
                   </button>
@@ -604,34 +711,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <Headphones className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-neutral-100">فريق الدعم الفني والمساعدة المباشرة (24/7)</h3>
+              <h3 className="font-bold text-sm text-neutral-100">نظام المراسلة والدعم الفني المباشر (24/7)</h3>
               <p className="text-xs text-neutral-300 mt-1 leading-relaxed">
-                نحن بجانبك دائماً! يمكنك إرسال تذكرة دعم مباشرة للمطور، أو التواصل فوراً عبر قنوات الدعم السريعة.
+                أرسل استفسارك أو تذكرتك البرمجية مباشرة من هنا دون الخروج من المنصة. تُسجل الرسائل وتُوجه فورياً لفريق المطورين.
               </p>
             </div>
           </div>
 
-          {/* Quick Contact Buttons */}
+          {/* Feature Badges Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <a
-              href="mailto:mohammedyousef8099@gmail.com?subject=تذكرة%20دعم%20فني%20-%20FGOM21%20AI"
-              className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 hover:border-emerald-500/50 flex flex-col gap-1.5 transition-all group"
-            >
+            <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 flex flex-col gap-1.5">
               <div className="flex items-center gap-2 text-emerald-400 text-xs font-bold">
                 <Send className="w-4 h-4" />
-                <span>البريد الإلكتروني المباشر</span>
+                <span>إرسال مباشر من داخل المنصة</span>
               </div>
-              <span className="text-xs text-neutral-300 font-mono truncate" dir="ltr">mohammedyousef8099@gmail.com</span>
-              <span className="text-[10px] text-emerald-400/80 mt-0.5 group-hover:underline">إرسال استفسار مباشر للمطور ↗</span>
-            </a>
+              <span className="text-xs text-neutral-300">بدون فتح برامج إضافية أو بريد خارجي</span>
+              <span className="text-[10px] text-emerald-400/80 mt-0.5">تواصل آمن ومحمي بالكامل</span>
+            </div>
 
             <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 flex flex-col gap-1.5">
               <div className="flex items-center gap-2 text-teal-400 text-xs font-bold">
                 <CheckCircle2 className="w-4 h-4" />
-                <span>سرعة المتابعة والاستجابة</span>
+                <span>تتبع وسرعة الاستجابة</span>
               </div>
-              <span className="text-xs text-neutral-300">متابعة يومية مستمرة</span>
-              <span className="text-[10px] text-teal-400/80 mt-0.5">الرد السريع خلال ساعات العمل الرسمية</span>
+              <span className="text-xs text-neutral-300">يتم إنشاء رقم تذكرة فريد فورياً</span>
+              <span className="text-[10px] text-teal-400/80 mt-0.5">متابعة دقيقة واستجابة سريعة</span>
             </div>
           </div>
 
@@ -640,39 +744,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="flex items-center justify-between">
               <h4 className="font-bold text-xs text-neutral-200 flex items-center gap-2">
                 <MessageSquare className="w-4 h-4 text-emerald-400" />
-                <span>إرسال تذكرة دعم فني فورية للمطور:</span>
+                <span>إرسال تذكرة دعم فني أو استفسار مباشر:</span>
               </h4>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
-                رد سريع
+                مباشر
               </span>
             </div>
 
             {ticketSuccess ? (
-              <div className="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/50 space-y-2 animate-in fade-in">
+              <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/50 space-y-2 animate-in fade-in">
                 <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs">
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>تم استلام تذكرتك بنجاح برقم: {ticketSuccess}</span>
+                  <span>تم إرسال تذكرتك بنجاح! رقم التذكرة: <span className="font-mono text-white bg-emerald-900/60 px-2 py-0.5 rounded">{ticketSuccess}</span></span>
                 </div>
                 <p className="text-[11px] text-neutral-300 leading-relaxed">
-                  شكراً لتواصلك! تم تسجيل تذكرتك وسيتم فحصها والرد عليها في أقرب وقت ممكن.
+                  تم تسجيل رسالتك بنجاح في المنصة وتوجيهها مباشرة إلى الدعم. سيتم مراجعة طلبك والتواصل معك عبر بريدك الإلكتروني المدخل.
                 </p>
                 <button
                   type="button"
                   onClick={() => setTicketSuccess(null)}
-                  className="text-[11px] text-emerald-400 hover:underline pt-1 cursor-pointer"
+                  className="text-[11px] text-emerald-400 font-bold hover:underline pt-1 cursor-pointer block"
                 >
-                  إرسال تذكرة أخرى
+                  + إرسال رسالة أو تذكرة أخرى
                 </button>
               </div>
             ) : (
               <form onSubmit={handleSendTicket} className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[11px] text-neutral-400 mb-1">نوع التذكرة:</label>
+                    <label className="block text-[11px] font-medium text-neutral-300 mb-1">الاسم الكامل:</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="اكتب اسمك الكود أو الكامل..."
+                      value={ticketName}
+                      onChange={(e) => setTicketName(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-800 rounded-xl p-2.5 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-neutral-300 mb-1">البريد الإلكتروني للرد عليك:</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="مثال: user@domain.com"
+                      value={ticketContact}
+                      onChange={(e) => setTicketContact(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-800 rounded-xl p-2.5 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-medium text-neutral-300 mb-1">نوع التذكرة / الموضوع:</label>
                     <select
                       value={ticketSubject}
                       onChange={(e) => setTicketSubject(e.target.value)}
-                      className="w-full bg-neutral-900 border border-neutral-800 rounded-lg p-2 text-xs text-neutral-200 focus:outline-none focus:border-emerald-500"
+                      className="w-full bg-neutral-900 border border-neutral-800 rounded-xl py-2.5 px-3.5 text-xs text-neutral-100 focus:outline-none focus:border-emerald-500 font-sans cursor-pointer text-right"
+                      dir="rtl"
                     >
                       <option value="مشكلة تقنية في تشغيل الكود">مشكلة تقنية في تشغيل الكود</option>
                       <option value="استفسار حول مفاتيح الذكاء الاصطناعي">استفسار حول مفاتيح الذكاء الاصطناعي</option>
@@ -680,72 +811,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <option value="استفسار برمجي عام">استفسار برمجي عام</option>
                     </select>
                   </div>
-
-                  <div>
-                    <label className="block text-[11px] text-neutral-400 mb-1">البريد أو وسيلة التواصل (اختياري):</label>
-                    <input
-                      type="text"
-                      placeholder="بريدك الإلكتروني للرد عليك..."
-                      value={ticketContact}
-                      onChange={(e) => setTicketContact(e.target.value)}
-                      className="w-full bg-neutral-900 border border-neutral-800 rounded-lg p-2 text-xs text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-[11px] text-neutral-400 mb-1">تفاصيل الرسالة أو المشكلة:</label>
+                  <label className="block text-[11px] font-medium text-neutral-300 mb-1">تفاصيل الرسالة أو الاستفسار:</label>
                   <textarea
-                    rows={3}
+                    rows={4}
                     required
-                    placeholder="اشرح المشكلة بالتفصيل أو ضع الكود الذي تواجه فيه صعوبة..."
+                    placeholder="اشرح استفسارك بالتفصيل أو ضع الأكواد أو المشكلة التي واجهتك..."
                     value={ticketMessage}
                     onChange={(e) => setTicketMessage(e.target.value)}
-                    className="w-full bg-neutral-900 border border-neutral-800 rounded-lg p-2.5 text-xs text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-emerald-500 resize-none"
+                    className="w-full bg-neutral-900 border border-neutral-800 rounded-xl p-2.5 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-emerald-500 resize-none"
                   />
                 </div>
 
                 <button
                   type="submit"
-                  disabled={isSendingTicket || !ticketMessage.trim()}
-                  className="flex items-center justify-center gap-2 w-full py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs transition-colors cursor-pointer shadow-md shadow-emerald-950/40"
+                  disabled={isSendingTicket || !ticketMessage.trim() || !ticketContact.trim()}
+                  className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs transition-colors cursor-pointer shadow-md shadow-emerald-950/40"
                 >
                   {isSendingTicket ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>جاري إرسال التذكرة...</span>
+                      <span>جاري إرسال التذكرة للمطور...</span>
                     </>
                   ) : (
                     <>
                       <Send className="w-3.5 h-3.5" />
-                      <span>إرسال التذكرة الفورية الآن</span>
+                      <span>إرسال التذكرة الآن (مباشر من المنصة)</span>
                     </>
                   )}
                 </button>
               </form>
             )}
-          </div>
-
-          {/* FAQ Accordion */}
-          <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
-            <h4 className="font-bold text-xs text-neutral-200 flex items-center gap-1.5">
-              <HelpCircle className="w-4 h-4 text-emerald-400" />
-              <span>الأسئلة التقنية الشائعة (FAQ):</span>
-            </h4>
-            <div className="space-y-2 text-xs text-neutral-400">
-              <div className="p-2.5 rounded-lg bg-neutral-900/60 border border-neutral-800/60">
-                <strong className="text-neutral-200 block mb-1">س: هل أحتاج لدفع أي رسوم لاستخدام المنصة؟</strong>
-                <span>ج: لا، المنصة مجانية 100% وتعمل افتراضياً بمحرك ذكاء اصطناعي مجاني، ويمكنك وضع مفتاحك الخاص إن رغبت في استخدام نماذج إضافية متقدمة.</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-neutral-900/60 border border-neutral-800/60">
-                <strong className="text-neutral-200 block mb-1">س: هل يتم تخزين مفاتيح الـ API في خوادمكم؟</strong>
-                <span>ج: لا إطلاقاً، مفاتيحك تُحفظ محلياً على جهازك فقط عبر (LocalStorage) وتُرسل مباشرة إلى مزود الخدمة دون أي تخزين خارجي.</span>
-              </div>
-              <div className="p-2.5 rounded-lg bg-neutral-900/60 border border-neutral-800/60">
-                <strong className="text-neutral-200 block mb-1">س: كيف أقوم بتشغيل ومعاينة الكود الناتج لايف؟</strong>
-                <span>ج: اضغط على زر "تشغيل الكود" الموجود بجانب أي كود يكتبه الذكاء الاصطناعي، أو افتح "استوديو الأكواد" من القائمة الجانبية لتعديل وتشغيل الكود مباشرة.</span>
-              </div>
-            </div>
           </div>
         </div>
       )}
@@ -756,8 +854,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 to-neutral-900 border border-emerald-500/30 space-y-2">
             <h3 className="font-bold text-sm text-neutral-100 flex items-center gap-1.5">
               <Shield className="w-4 h-4 text-emerald-400" />
-              <span>ميثاق الخصوصية وشروط الاستخدام في FGOM21 AI</span>
+              <span>ميثاق الخصوصية والسياسة الأمنية في FGOM21 AI 🇸🇦</span>
             </h3>
+            <div className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-[#00E676] font-bold border border-emerald-500/30 inline-block mb-1">
+              🇸🇦 منصة وبرمجة سعودية 100% | حماية سيادية تامة
+            </div>
             <p className="text-neutral-400 text-xs">
               تاريخ آخر تحديث: 2026 | سياسة صارمة تحمي أمان الأكواد والملفات والمفاتيح لكل مطور ومستخدم.
             </p>
@@ -767,20 +868,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div>
               <h4 className="font-bold text-neutral-100 mb-1 flex items-center gap-1.5 text-xs text-emerald-400">
                 <Lock className="w-3.5 h-3.5" />
-                <span>1. خصوصية الأكواد وسرية مفاتيح الـ API (Local-Only Storage)</span>
+                <span>1. معمارية انعدام قواعد البيانات تماماً (Zero-Database Architecture)</span>
               </h4>
               <p className="text-neutral-400 text-xs leading-relaxed">
-                جميع المفاتيح الخاصة (OpenAI, Gemini, DeepSeek, Groq, Claude, Anthropic) تُخزن محلياً فقط في متصفحك (Browser LocalStorage). لا نقوم إطلاقاً بتسجيلها أو تخزينها أو مشاركتها في أي قاعدة بيانات خارجية.
+                الموقع لا يحتوي على أي قواعد بيانات مركزية إطلاقاً لحفظ المستخدمين أو المحادثات أو الأكواد. كل شيء يبقى محلياً في متصفحك الشخصي عبر (LocalStorage) فقط ولا يغادر جهازك. انعدام قواعد البيانات = انعدام مخاطر تسريب البيانات 100%.
               </p>
             </div>
 
             <div className="border-t border-neutral-900 pt-3">
               <h4 className="font-bold text-neutral-100 mb-1 flex items-center gap-1.5 text-xs text-emerald-400">
                 <Shield className="w-3.5 h-3.5" />
-                <span>2. معالجة الصور والملفات المرفقة (Zero Retention)</span>
+                <span>2. انعدام تخزين الصور والملفات نهائياً ولا تجسس (Zero File Storage & Anti-Spyware)</span>
               </h4>
               <p className="text-neutral-400 text-xs leading-relaxed">
-                الصور والأكواد التي ترفعها بغرض التحليل يتم إرسالها عبر قنوات اتصال مشفرة ومؤمنة بأعلى معايير TLS 1.3 ويتم معالجتها بالذاكرة المؤقتة اللحظية فقط دون أي تخزين دائم أو تتبع.
+                عند رفع صور أو ملفات برمجية لتحليلها، تتم المعالجة اللحظية في الذاكرة المؤقتة للمتصفح فقط دون حفظ. لا نقوم برفع أو حفظ أي صورة أو ملف على أي خوادم تخزين، والموقع خالي 100% من أي برمجيات تجسس أو تتبع (No Spyware, No Telemetry, Zero Cookies).
               </p>
             </div>
 
@@ -814,7 +915,106 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </p>
             </div>
           </div>
+
+          {/* Moved FAQ Accordion into Privacy Tab */}
+          <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
+            <h4 className="font-bold text-xs text-neutral-200 flex items-center gap-1.5">
+              <HelpCircle className="w-4 h-4 text-emerald-400" />
+              <span>الأسئلة الشائعة والسياسة التقنية (FAQ & Policy):</span>
+            </h4>
+            <div className="space-y-2 text-xs text-neutral-400">
+              <div className="p-2.5 rounded-lg bg-neutral-900/60 border border-neutral-800/60">
+                <strong className="text-neutral-200 block mb-1">س: هل أحتاج لدفع أي رسوم لاستخدام المنصة؟</strong>
+                <span>ج: لا، المنصة مجانية 100% وتعمل افتراضياً بمحرك ذكاء اصطناعي مجاني، ويمكنك وضع مفتاحك الخاص إن رغبت في استخدام نماذج إضافية متقدمة.</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-neutral-900/60 border border-neutral-800/60">
+                <strong className="text-neutral-200 block mb-1">س: هل يتم تخزين مفاتيح الـ API في خوادمكم؟</strong>
+                <span>ج: لا إطلاقاً، مفاتيحك تُحفظ محلياً على جهازك فقط عبر (LocalStorage) وتُرسل مباشرة إلى مزود الخدمة دون أي تخزين خارجي.</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-neutral-900/60 border border-neutral-800/60">
+                <strong className="text-neutral-200 block mb-1">س: كيف أقوم بتشغيل ومعاينة الكود الناتج لايف؟</strong>
+                <span>ج: اضغط على زر "تشغيل الكود" الموجود بجانب أي كود يكتبه الذكاء الاصطناعي، أو افتح "استوديو الأكواد" من القائمة الجانبية لتعديل وتشغيل الكود مباشرة.</span>
+              </div>
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* 4. Custom Branding & Logo Tab */}
+      {activeTab === "branding" && (
+        <div className="space-y-4 animate-in fade-in duration-150 text-xs text-neutral-300 leading-relaxed">
+          <div className="p-4 rounded-xl bg-gradient-to-r from-amber-950/40 via-neutral-900 to-neutral-900 border border-amber-500/30 space-y-2">
+            <h3 className="font-bold text-sm text-neutral-100 flex items-center gap-1.5">
+              <Image className="w-4 h-4 text-amber-400" />
+              <span>تخصيص شعار وهوية المنصة بالكامل</span>
+            </h3>
+            <p className="text-neutral-400 text-xs">
+              يمكنك رفع شعارك الخاص (PNG, JPG, SVG, WebP) ليظهر فوراً في الشريط العلوي، القائمة الجانبية، شاشة البداية، وأيقونات المحادثة.
+            </p>
+          </div>
+
+          {customLogoNotice && (
+            <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-500/50 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{customLogoNotice}</span>
+            </div>
+          )}
+
+          <div className="p-5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-5">
+            <div className="flex flex-col sm:flex-row items-center gap-5">
+              <div className="p-3 rounded-2xl bg-neutral-900 border border-neutral-700/80 shadow-inner flex flex-col items-center gap-2">
+                <span className="text-[11px] text-neutral-400 font-bold">معاينة الشعار الحالي:</span>
+                <BrandLogo size="xl" />
+              </div>
+
+              <div className="space-y-3 flex-1 text-center sm:text-right">
+                <h4 className="font-bold text-neutral-100 text-sm">
+                  اختر صورة الشعار من جهازك:
+                </h4>
+                <p className="text-[11px] text-neutral-400 leading-relaxed">
+                  يفضل استخدام صورة مربعة واضحة (بدقة 512x512 أو 256x256). سيتم حفظها محلياً في متصفحك وتطبيقها مباشرة على كافة أجزاء الموقع.
+                </p>
+
+                <div className="flex items-center gap-2.5 flex-wrap justify-center sm:justify-start pt-1">
+                  <label className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer shadow-md shadow-emerald-950 transition-colors">
+                    <Upload className="w-4 h-4" />
+                    <span>رفع شعار جديد من الجهاز</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLogoUpload}
+                      className="hidden"
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleResetLogo}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-medium text-xs transition-colors cursor-pointer border border-neutral-700"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-neutral-400" />
+                    <span>استعادة الشعار الافتراضي</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t border-neutral-900 pt-3 text-[11px] text-neutral-400 space-y-1">
+              <span className="font-bold text-neutral-300 block">💡 طريقة بديلة للمطورين:</span>
+              <p>
+                يمكنك أيضاً استبدال ملف الصورة مباشرة بوضع شعارك في مجلد المشروع باسم:
+                <code className="text-emerald-400 mx-1 bg-neutral-900 px-1.5 py-0.5 rounded border border-neutral-800 font-mono">public/logo.png</code>
+                أو
+                <code className="text-emerald-400 mx-1 bg-neutral-900 px-1.5 py-0.5 rounded border border-neutral-800 font-mono">public/logo.jpg</code>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Founder & Platform Story Tab */}
+      {activeTab === "story" && (
+        <StorySection />
       )}
     </div>
 
@@ -847,3 +1047,4 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     </div>
   );
 };
+

@@ -3,6 +3,9 @@ import { Upload, FileCode, X, Eye, Sparkles } from "lucide-react";
 import { CodeFile } from "../types";
 import { readFileAsCodeFile, formatFileSize } from "../utils/fileParser";
 
+const MAX_FILES = 50;
+const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024;
+
 interface FileUploadAreaProps {
   files: CodeFile[];
   onFilesChange: (files: CodeFile[]) => void;
@@ -23,9 +26,9 @@ export const FileUploadArea: React.FC<FileUploadAreaProps> = ({
 
   const handleFilesSelected = async (fileList: FileList | null) => {
     if (!fileList) return;
-    const remainingSlots = 5 - files.length;
+    const remainingSlots = MAX_FILES - files.length;
     if (remainingSlots <= 0) {
-      alert("الحد الأقصى المسموح به هو 5 ملفات برمجية.");
+      alert(`الحد الأقصى المسموح به هو ${MAX_FILES} ملفًا أو صورة.`);
       return;
     }
 
@@ -33,8 +36,7 @@ export const FileUploadArea: React.FC<FileUploadAreaProps> = ({
     const parsedFiles: CodeFile[] = [];
 
     for (const f of filesToProcess) {
-      // Check file size (limit 2MB per text code file)
-      if (f.size > 2 * 1024 * 1024) {
+      if (f.size > MAX_FILE_SIZE_BYTES) {
         alert(`الملف ${f.name} كبير جداً (أكثر من 2 ميجابايت).`);
         continue;
       }
@@ -57,7 +59,7 @@ export const FileUploadArea: React.FC<FileUploadAreaProps> = ({
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    if (!disabled && files.length < 5) {
+    if (!disabled && files.length < MAX_FILES) {
       setIsDragging(true);
     }
   };
@@ -75,8 +77,8 @@ export const FileUploadArea: React.FC<FileUploadAreaProps> = ({
   };
 
   return (
-    <div className="w-full space-y-2">
-      {/* Hidden file input supporting code and images */}
+    <div className="w-full space-y-2" dir="rtl">
+      {/* Hidden file input */}
       <input
         ref={fileInputRef}
         type="file"
@@ -89,118 +91,124 @@ export const FileUploadArea: React.FC<FileUploadAreaProps> = ({
         }}
       />
 
-      {/* Upload button or active drag zone */}
+      {/* Upload button when no files are attached */}
       {files.length === 0 ? (
         <div
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => !disabled && fileInputRef.current?.click()}
-          className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-dashed text-xs transition-all cursor-pointer ${
+          className={`flex items-center justify-between px-3.5 py-2 rounded-xl border border-dashed text-xs transition-all cursor-pointer ${
             isDragging
               ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
-              : "border-neutral-800 hover:border-neutral-700 bg-neutral-900/50 hover:bg-neutral-900 text-neutral-400"
+              : "border-neutral-800 hover:border-neutral-700 bg-neutral-900/60 hover:bg-neutral-900 text-neutral-400"
           }`}
         >
           <div className="flex items-center gap-2">
-            <Upload className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>
-              إرفاق صور تصاميم أو ملفات برمجية (PNG, JPG, JS, HTML, Python...)
+            <Upload className="w-4 h-4 text-[#00E676] shrink-0" />
+            <span className="font-extrabold text-[11px] sm:text-xs text-neutral-200">
+              إرفاق صور تصاميم أو ملفات برمجية
             </span>
           </div>
-          <span className="text-[11px] bg-neutral-800 px-2 py-0.5 rounded text-neutral-400">
-            انقر لرفع صورة أو كود
+          <span className="text-[10px] bg-neutral-800 px-2 py-0.5 rounded text-neutral-400 font-bold shrink-0">
+            حتى 50 ملفاً أو صورة
           </span>
         </div>
       ) : (
-        <div className="bg-neutral-900/80 border border-neutral-800 rounded-xl p-2.5 space-y-2">
+        /* Attached files container: COMPACT HORIZONTAL SCROLLBAR (العرض) */
+        <div className="bg-[#121214] border border-neutral-800/90 rounded-2xl p-2 space-y-1.5 shadow-md">
+          {/* Header info */}
           <div className="flex items-center justify-between text-xs text-neutral-400 px-1">
-            <span className="flex items-center gap-1.5 font-medium text-neutral-300">
-              <FileCode className="w-4 h-4 text-emerald-400" />
-              الملفات المرفقة للمشروع ({files.length}/5)
-            </span>
-            <div className="flex items-center gap-2">
-              {files.length < 5 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[#00E676] font-bold text-xs">📁</span>
+              <span className="font-extrabold text-neutral-200 text-[11px]">
+                الملفات المرفقة ({files.length}/{MAX_FILES})
+              </span>
+              <span className="text-[10px] text-neutral-500 hidden sm:inline">(تمرير أفقي ↔)</span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onInstantAnalyze}
+                disabled={disabled}
+                className="text-[#00E676] hover:underline font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+              >
+                <Sparkles className="w-3 h-3 text-[#00E676]" />
+                <span>تحليل معماري شامل</span>
+              </button>
+
+              {files.length < MAX_FILES && (
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="text-emerald-400 hover:underline text-[11px]"
+                  className="text-emerald-400 hover:underline font-bold text-[11px] cursor-pointer"
                 >
-                  + إضافة ملف آخر
+                  + إضافة
                 </button>
               )}
+
               <button
                 type="button"
                 onClick={() => onFilesChange([])}
-                className="text-neutral-500 hover:text-red-400 text-[11px]"
+                className="text-neutral-500 hover:text-red-400 font-bold text-[11px] cursor-pointer"
               >
                 إزالة الكل
               </button>
             </div>
           </div>
 
-          {/* List of files */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {/* ⚡ HORIZONTAL SCROLLABLE CAROUSEL (عرض أفقي مدمج لا يغطي الشات) */}
+          <div className="flex items-center gap-2 overflow-x-auto py-1 px-0.5 no-scrollbar scroll-smooth max-h-24">
             {files.map((file) => (
               <div
                 key={file.id}
-                className="flex items-center justify-between gap-2 p-2 rounded-lg bg-neutral-950 border border-neutral-800/90 text-xs"
+                className="flex items-center gap-2 p-1.5 pr-2 rounded-xl bg-[#18181c] border border-neutral-800/90 text-xs shrink-0 w-48 max-w-[200px] shadow-xs group"
               >
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  <div className="p-1.5 rounded bg-emerald-500/10 text-emerald-400 shrink-0">
-                    {file.isImage && file.dataUrl ? (
-                      <img
-                        src={file.dataUrl}
-                        alt={file.name}
-                        className="w-6 h-6 object-cover rounded border border-emerald-500/40"
-                      />
-                    ) : (
-                      <FileCode className="w-3.5 h-3.5" />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-mono text-neutral-200 truncate text-[11px] font-medium" title={file.name}>
-                      {file.name}
-                    </p>
-                    <p className="text-[10px] text-neutral-500 font-mono">
-                      {file.isImage ? "صورة تصميم (Image)" : `${file.language.toUpperCase()} • ${file.lines} سطر`} • {formatFileSize(file.size)}
-                    </p>
-                  </div>
+                {/* Thumbnail / Icon */}
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[#00E676] flex items-center justify-center shrink-0 overflow-hidden">
+                  {file.isImage && file.dataUrl ? (
+                    <img
+                      src={file.dataUrl}
+                      alt={file.name}
+                      className="w-full h-full object-cover rounded-lg"
+                    />
+                  ) : (
+                    <FileCode className="w-4 h-4 text-[#00E676]" />
+                  )}
                 </div>
 
-                <div className="flex items-center gap-1 shrink-0">
+                {/* File details */}
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-neutral-100 truncate text-[11px] font-bold" title={file.name}>
+                    {file.name}
+                  </p>
+                  <p className="text-[9px] text-neutral-400 font-mono truncate">
+                    {file.isImage ? "صورة تصميم" : file.language.toUpperCase()} • {formatFileSize(file.size)}
+                  </p>
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex items-center gap-0.5 shrink-0">
                   <button
                     type="button"
                     onClick={() => onPreviewFile(file)}
                     title="معاينة الملف"
-                    className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
+                    className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer"
                   >
-                    <Eye className="w-3.5 h-3.5" />
+                    <Eye className="w-3 h-3" />
                   </button>
                   <button
                     type="button"
                     onClick={() => handleRemove(file.id)}
                     title="إزالة"
-                    className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-red-400 transition-colors"
+                    className="p-1 rounded hover:bg-neutral-800 text-neutral-400 hover:text-red-400 transition-colors cursor-pointer"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-3 h-3" />
                   </button>
                 </div>
               </div>
             ))}
-          </div>
-
-          {/* Quick analysis button */}
-          <div className="pt-1 flex justify-end">
-            <button
-              type="button"
-              onClick={onInstantAnalyze}
-              disabled={disabled}
-              className="flex items-center gap-1.5 text-xs bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-lg transition-colors font-medium cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-              <span>تحليل معماري شامل وفحص أمان للملفات المرفقة</span>
-            </button>
           </div>
         </div>
       )}

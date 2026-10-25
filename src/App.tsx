@@ -38,6 +38,10 @@ import { CodeSandboxModal } from "./components/CodeSandboxModal";
 import { AutonomousAgentModal } from "./components/AutonomousAgentModal";
 import { SecurityAuditModal } from "./components/SecurityAuditModal";
 import { GitHubInspectorModal } from "./components/GitHubInspectorModal";
+import { DatabaseConnectorModal } from "./components/DatabaseConnectorModal";
+import { HostingPublisherModal } from "./components/HostingPublisherModal";
+import { InteractiveFlowMapModal } from "./components/InteractiveFlowMapModal";
+import { DeploymentHubModal } from "./components/DeploymentHubModal";
 import { SplashScreen } from "./components/SplashScreen";
 import { OnboardingGuideModal } from "./components/OnboardingGuideModal";
 import { AI_PROVIDERS } from "./data/providers";
@@ -120,6 +124,9 @@ export default function App() {
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [githubModalOpen, setGithubModalOpen] = useState(false);
+  const [deploymentHubOpen, setDeploymentHubOpen] = useState(false);
+  const [deploymentHubPath, setDeploymentHubPath] = useState<"hosting" | "database" | "accounts">("hosting");
+  const [flowMapOpen, setFlowMapOpen] = useState(false);
   const [guideModalOpen, setGuideModalOpen] = useState(false);
   const [showSplash, setShowSplash] = useState(() => {
     try {
@@ -128,6 +135,17 @@ export default function App() {
       return false;
     }
   });
+
+  // OAuth providers return the customer to the workspace after consent. Reopen
+  // the relevant panel so the successful connection is immediately visible.
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const integration = query.get("integration");
+    if (!integration) return;
+
+    setDeploymentHubPath(integration === "supabase" ? "accounts" : "hosting");
+    setDeploymentHubOpen(true);
+  }, []);
 
   const [healthStatus, setHealthStatus] = useState<{
     hasGeminiKey: boolean;
@@ -696,6 +714,7 @@ export default function App() {
         onOpenAgent={() => setAgentModalOpen(true)}
         onOpenSecurity={() => setSecurityModalOpen(true)}
         onOpenGitHub={() => setGithubModalOpen(true)}
+        onOpenDeployments={() => setDeploymentHubOpen(true)}
         onOpenGuide={() => setGuideModalOpen(true)}
       />
 
@@ -752,6 +771,11 @@ export default function App() {
                   setInputPrompt(prompt);
                   textareaRef.current?.focus();
                 }}
+                onOpenDeploymentPath={(path) => {
+                  setDeploymentHubPath(path);
+                  setDeploymentHubOpen(true);
+                }}
+                onOpenFlowMap={() => setFlowMapOpen(true)}
               />
             </div>
           ) : (
@@ -794,8 +818,8 @@ export default function App() {
         </div>
 
         {/* Input & File Upload Area */}
-        <div className="border-t border-neutral-800 bg-neutral-950/95 p-4 sm:p-5 shrink-0">
-          <div className="max-w-4xl mx-auto space-y-3">
+        <div className="shrink-0 border-t border-neutral-800 bg-neutral-950/95 px-3 py-2.5 sm:p-4 lg:px-6 lg:py-3">
+          <div className="mx-auto max-w-6xl space-y-2">
             {/* File Upload Zone / Attached Files */}
             <FileUploadArea
               files={uploadedFiles}
@@ -825,7 +849,7 @@ export default function App() {
                   }
                 }}
                 disabled={isLoading}
-                className={`w-full bg-transparent px-4 pr-4 pl-14 text-neutral-100 placeholder-neutral-500 focus:outline-none resize-none leading-relaxed transition-all ${
+                className={`w-full bg-transparent px-4 pr-4 pl-14 text-neutral-100 placeholder-neutral-500 focus:outline-none resize-none leading-relaxed transition-all lg:py-2 ${
                   fontSize === "xlarge"
                     ? "text-lg sm:text-xl py-4"
                     : fontSize === "large"
@@ -867,18 +891,14 @@ export default function App() {
 
             {/* Display Active Model and registered API Key ONLY if the user entered an AI key */}
             {enteredAIKeys.length > 0 && (
-              <div className="flex flex-col gap-1.5 text-[11px] text-neutral-500 px-1 font-mono">
-                <div className="flex items-center gap-2 flex-wrap font-sans">
-                  <span>
-                    النموذج النشط:{" "}
-                    <strong className="text-neutral-200">
-                      {models.find((m) => m.id === activeModel)?.name || activeModel}
-                    </strong>
-                  </span>
-                </div>
-
-                {/* Directly under Active Model: Display the entered AI API Key */}
-                <div className="flex items-center gap-2 flex-wrap pt-0.5 font-sans">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-neutral-500 font-sans">
+                <span className="shrink-0">
+                  النموذج النشط:{" "}
+                  <strong className="text-neutral-200">
+                    {models.find((m) => m.id === activeModel)?.name || activeModel}
+                  </strong>
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-neutral-400 flex items-center gap-1 text-[11px]">
                     <Key className="w-3 h-3 text-emerald-400 shrink-0" />
                     مفتاح الذكاء الاصطناعي المسجل:
@@ -1000,6 +1020,29 @@ export default function App() {
         }}
       />
 
+      <DeploymentHubModal
+        isOpen={deploymentHubOpen}
+        onClose={() => setDeploymentHubOpen(false)}
+        initialPath={deploymentHubPath}
+        settings={settings}
+        model={activeModel}
+        onOpenSettings={() => {
+          setDeploymentHubOpen(false);
+          setSettingsModalOpen(true);
+        }}
+      />
+
+      <InteractiveFlowMapModal
+        isOpen={flowMapOpen}
+        onClose={() => setFlowMapOpen(false)}
+        settings={settings}
+        model={activeModel}
+        onOpenSettings={() => {
+          setFlowMapOpen(false);
+          setSettingsModalOpen(true);
+        }}
+      />
+
       {/* 5. 🧭 Onboarding Guide Modal (Explaining What Every Button Does) */}
       <OnboardingGuideModal
         isOpen={guideModalOpen}
@@ -1008,6 +1051,7 @@ export default function App() {
         onOpenAgent={() => setAgentModalOpen(true)}
         onOpenSecurity={() => setSecurityModalOpen(true)}
         onOpenGitHub={() => setGithubModalOpen(true)}
+        onOpenDeployments={() => setDeploymentHubOpen(true)}
         onOpenSettings={() => setSettingsModalOpen(true)}
       />
 

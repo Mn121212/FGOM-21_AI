@@ -1,21 +1,399 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
+import { createHash, randomUUID } from "crypto";
+import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
+import { timingSafeEqual } from "crypto";
 import { createServer as createViteServer } from "vite";
+import JSZip from "jszip";
 import { GoogleGenAI } from "@google/genai";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import helmet from "helmet";
+import * as ArcjetModule from "@arcjet/node";
+import { shield, detectBot, tokenBucket } from "@arcjet/node";
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const PLATFORM_PROVIDERS = new Set([
+  "github",
+  "railway",
+  "render",
+  "flyio",
+  "vercel",
+  "netlify",
+  "supabase",
+  "neon",
+  "planetscale",
+  "turso",
+]);
 
-// Body parsing with support for code file payloads up to 10MB
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+type OAuthProvider = "github" | "vercel" | "supabase";
+
+type PendingOAuthConnection = {
+  userId: string;
+  provider: OAuthProvider;
+  codeVerifier: string;
+  createdAt: number;
+};
+
+const pendingOAuthConnections = new Map<string, PendingOAuthConnection>();
+const OAUTH_CONNECTION_TTL_MS = 10 * 60 * 1000;
+
+function toBase64Url(value: Buffer) {
+  return value.toString("base64url");
+}
+
+function createPkcePair() {
+  const codeVerifier = toBase64Url(randomBytes(48));
+  const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+  return { codeVerifier, codeChallenge };
+}
+
+function getAppUrl(req: express.Request) {
+  const configured = process.env.APP_URL?.trim();
+  if (configured) return configured.replace(/\/$/, "");
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+function getOAuthConfig(provider: OAuthProvider) {
+  const config = {
+    github: {
+      clientId: process.env.GITHUB_OAUTH_CLIENT_ID,
+      clientSecret: process.env.GITHUB_OAUTH_CLIENT_SECRET,
+      authorizeUrl: "https://github.com/login/oauth/authorize",
+      tokenUrl: "https://github.com/login/oauth/access_token",
+      scope: "read:user repo",
+    },
+    vercel: {
+      clientId: process.env.VERCEL_OAUTH_CLIENT_ID,
+      clientSecret: process.env.VERCEL_OAUTH_CLIENT_SECRET,
+      authorizeUrl: "https://vercel.com/oauth/authorize",
+      tokenUrl: "https://api.vercel.com/login/oauth/token",
+      scope: "openid email profile offline_access",
+    },
+    supabase: {
+      clientId: process.env.SUPABASE_OAUTH_CLIENT_ID,
+      clientSecret: process.env.SUPABASE_OAUTH_CLIENT_SECRET,
+      authorizeUrl: "https://api.supabase.com/v1/oauth/authorize",
+      tokenUrl: "https://api.supabase.com/v1/oauth/token",
+      scope: "",
+    },
+  }[provider];
+
+  return config.clientId && config.clientSecret ? config : null;
+}
+
+function isOAuthProvider(value: string): value is OAuthProvider {
+  return value === "github" || value === "vercel" || value === "supabase";
+}
+
+function getPlatformAdmin(): SupabaseClient | null {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) return null;
+
+  return createClient(url, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
+function getCredentialEncryptionKey(): Buffer | null {
+  const value = process.env.PLATFORM_CREDENTIALS_ENCRYPTION_KEY;
+  if (!value) return null;
+
+  const key =
+    /^[a-f0-9]{64}$/i.test(value)
+      ? Buffer.from(value, "hex")
+      : Buffer.from(value, "base64");
+  return key.length === 32 ? key : null;
+}
+
+function encryptProviderSecret(secret: string): string {
+  const key = getCredentialEncryptionKey();
+  if (!key) throw new Error("PLATFORM_CREDENTIALS_ENCRYPTION_KEY is missing or invalid");
+
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+  return `${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${ciphertext.toString("base64url")}`;
+}
+
+function decryptProviderSecret(encrypted: string): string {
+  const key = getCredentialEncryptionKey();
+  if (!key) throw new Error("PLATFORM_CREDENTIALS_ENCRYPTION_KEY is missing or invalid");
+
+  const [ivValue, tagValue, ciphertextValue] = encrypted.split(".");
+  if (!ivValue || !tagValue || !ciphertextValue) {
+    throw new Error("Stored provider credential has an invalid format");
+  }
+
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivValue, "base64url"));
+  decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(ciphertextValue, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
+async function authenticatePlatformUser(
+  req: express.Request,
+  res: express.Response
+): Promise<{ userId: string; admin: SupabaseClient } | null> {
+  const admin = getPlatformAdmin();
+  if (!admin || !getCredentialEncryptionKey()) {
+    res.status(503).json({
+      error: "مسار النشر غير مهيأ. يلزم إعداد Supabase ومفتاح تشفير بيانات الربط على الخادم.",
+      code: "DEPLOYMENT_HUB_NOT_CONFIGURED",
+    });
+    return null;
+  }
+
+  const authorization = req.header("authorization") || "";
+  const accessToken = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!accessToken) {
+    res.status(401).json({ error: "سجّل الدخول للمتابعة.", code: "AUTH_REQUIRED" });
+    return null;
+  }
+
+  const { data, error } = await admin.auth.getUser(accessToken);
+  if (error || !data.user) {
+    res.status(401).json({ error: "انتهت جلسة الدخول أو أنها غير صالحة.", code: "INVALID_SESSION" });
+    return null;
+  }
+
+  return { userId: data.user.id, admin };
+}
+
+// 🔒 Helmet Security Headers Middleware (Clickjacking & MIME-Sniffing Protection)
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // Prevents breaking inline previews and Vite assets
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+// 🛡️ Arcjet Security Engine Setup (Key: ajkey_01m5jbehn5enz834kme0xwq2t2)
+const ARCJET_KEY = process.env.ARCJET_KEY || "ajkey_01m5jbehn5enz834kme0xwq2t2";
+
+const arcjetFactory =
+  typeof (ArcjetModule as any).arcjet === "function"
+    ? (ArcjetModule as any).arcjet
+    : typeof ArcjetModule.default === "function"
+    ? ArcjetModule.default
+    : typeof ArcjetModule === "function"
+    ? ArcjetModule
+    : null;
+
+const aj =
+  typeof arcjetFactory === "function"
+    ? arcjetFactory({
+        key: ARCJET_KEY,
+        characteristics: ["ip.src"], // Track request limits per client IP
+        rules: [
+          // 1. Shield Rule: Protection against SQL Injection, XSS, and Common Attacks
+          shield({ mode: "LIVE" }),
+
+          // 2. Bot Protection: Detect and block malicious automated bot scripts
+          detectBot({
+            mode: "LIVE",
+            allow: ["CATEGORY:SEARCH_ENGINE"], // Allow Google/Bing search engines for SEO
+          }),
+
+          // 3. Rate Limiting (Token Bucket): 20 requests capacity, refill 10 per 60 seconds
+          tokenBucket({
+            mode: "LIVE",
+            refillRate: 10,
+            interval: 60,
+            capacity: 20,
+          }),
+        ],
+      })
+    : null;
+
+// 🛡️ Arcjet Express Middleware Function (Safe Fallback Pipeline)
+async function arcjetSecurityMiddleware(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  if (!ARCJET_KEY || !aj) return next();
+
+  try {
+    const decision = await aj.protect(req, { requested: 1 });
+
+    if (decision && decision.isDenied()) {
+      if (decision.reason && typeof decision.reason.isRateLimit === "function" && decision.reason.isRateLimit()) {
+        console.warn(`🛡️ [Arcjet Rate Limit Exceeded] IP: ${req.ip}`);
+        return res.status(429).json({
+          error: "تم تجاوز حد الطلبات المسموح به مؤقتاً (Rate Limit Exceeded). يرجى الانتظار دقيقة قبل إرسال المزيد من الرسائل.",
+          code: "TOO_MANY_REQUESTS",
+        });
+      }
+
+      if (decision.reason && typeof decision.reason.isBot === "function" && decision.reason.isBot()) {
+        console.warn(`🤖 [Arcjet Bot Blocked] IP: ${req.ip}`);
+        return res.status(403).json({
+          error: "تم حظر هذا الطلب بواسطة نظام حماية البوتات والسكربتات التلقائية (Bot Protection).",
+          code: "BOT_DETECTED",
+        });
+      }
+
+      console.warn(`🛡️ [Arcjet Shield Denied] IP: ${req.ip}`);
+      return res.status(403).json({
+        error: "تم حظر الطلب لدواعي الأمان والحماية السحابية (Arcjet Security Shield).",
+        code: "ACCESS_DENIED",
+      });
+    }
+
+    next();
+  } catch (err) {
+    console.warn("Arcjet protection check warning (falling back to standard pipeline):", err);
+    next();
+  }
+}
+
+// Accept up to 50 code files or reference images in one chat request.
+app.use(express.json({ limit: "80mb" }));
+
+type PublishedSiteAnalytics = {
+  ownerKeyHash: string;
+  name: string;
+  url: string;
+  visits: number;
+  createdAt: string;
+};
+
+const HOSTING_DATA_PATH = process.env.FGOM_HOSTING_DATA_PATH?.trim() || path.join(process.cwd(), ".data");
+const PUBLISHED_SITES_PATH = path.join(HOSTING_DATA_PATH, "published-sites.json");
+
+function loadPublishedSites(): Record<string, PublishedSiteAnalytics> {
+  if (!fs.existsSync(PUBLISHED_SITES_PATH)) return {};
+  const parsed: unknown = JSON.parse(fs.readFileSync(PUBLISHED_SITES_PATH, "utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Published sites analytics file has an invalid format.");
+  }
+  return parsed as Record<string, PublishedSiteAnalytics>;
+}
+
+function savePublishedSites(sites: Record<string, PublishedSiteAnalytics>) {
+  fs.mkdirSync(path.dirname(PUBLISHED_SITES_PATH), { recursive: true });
+  const temporaryPath = `${PUBLISHED_SITES_PATH}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(sites), { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporaryPath, PUBLISHED_SITES_PATH);
+}
+
+function isSafeHostedPath(filePath: string): boolean {
+  const parts = filePath.replace(/\\/g, "/").split("/");
+  return (
+    filePath.length > 0 &&
+    filePath.length <= 240 &&
+    !filePath.startsWith("/") &&
+    parts.every((part) => part && part !== "." && part !== "..") &&
+    !parts.some((part) =>
+      [".git", "node_modules", ".npmrc", ".pypirc"].includes(part.toLowerCase()) ||
+      /^\.env(?:\.|$)/i.test(part)
+    ) &&
+    !/\.(?:pem|key|p12|pfx|keystore)$/i.test(filePath)
+  );
+}
+app.use(express.urlencoded({ extended: true, limit: "80mb" }));
+
+const FREE_REQUEST_LIMIT = 25;
+const FREE_REQUEST_WINDOW_MS = 24 * 60 * 60 * 1000;
+const QUOTA_COOKIE_NAME = "fgom_usage_id";
+const FORMSPREE_SUPPORT_ENDPOINT = "https://formspree.io/f/xdearyyg";
+const FREE_REQUEST_STORE_PATH = path.join(process.cwd(), ".data", "free-request-usage.json");
+
+function loadFreeRequestUsage(): Map<string, { count: number; startedAt: number }> {
+  try {
+    const raw = JSON.parse(fs.readFileSync(FREE_REQUEST_STORE_PATH, "utf8"));
+    return new Map(
+      Object.entries(raw).filter(
+        ([, value]: [string, any]) =>
+          value && Number.isFinite(value.count) && Number.isFinite(value.startedAt)
+      ) as Array<[string, { count: number; startedAt: number }]>
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+const freeRequestUsage = loadFreeRequestUsage();
+
+function persistFreeRequestUsage() {
+  try {
+    fs.mkdirSync(path.dirname(FREE_REQUEST_STORE_PATH), { recursive: true });
+    fs.writeFileSync(
+      FREE_REQUEST_STORE_PATH,
+      JSON.stringify(Object.fromEntries(freeRequestUsage)),
+      "utf8"
+    );
+  } catch (error) {
+    console.error("Could not persist free request usage:", error);
+  }
+}
+
+function getCookieValue(cookieHeader: string | undefined, name: string): string | null {
+  if (!cookieHeader) return null;
+  const item = cookieHeader.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
+  return item ? decodeURIComponent(item.slice(name.length + 1)) : null;
+}
+
+function consumeFreeRequest(req: express.Request, res: express.Response, hasOwnApiKey: boolean) {
+  if (hasOwnApiKey) return { allowed: true, remaining: null, resetAt: null };
+
+  let clientId = getCookieValue(req.headers.cookie, QUOTA_COOKIE_NAME);
+  if (!clientId || !/^[a-z0-9-]{20,}$/i.test(clientId)) {
+    clientId = randomUUID();
+    res.cookie(QUOTA_COOKIE_NAME, clientId, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: FREE_REQUEST_WINDOW_MS,
+    });
+  }
+
+  const now = Date.now();
+  const existing = freeRequestUsage.get(clientId);
+  const expired = !existing || now - existing.startedAt >= FREE_REQUEST_WINDOW_MS;
+  const usage = expired ? { count: 0, startedAt: now } : existing;
+
+  if (usage.count >= FREE_REQUEST_LIMIT) {
+    return {
+      allowed: false,
+      remaining: 0,
+      resetAt: usage.startedAt + FREE_REQUEST_WINDOW_MS,
+    };
+  }
+
+  usage.count += 1;
+  freeRequestUsage.set(clientId, usage);
+  persistFreeRequestUsage();
+  return {
+    allowed: true,
+    remaining: FREE_REQUEST_LIMIT - usage.count,
+    resetAt: usage.startedAt + FREE_REQUEST_WINDOW_MS,
+  };
+}
 
 // Lazy GoogleGenAI client
 let genAIClient: GoogleGenAI | null = null;
+
+function hasGeminiApiKey(): boolean {
+  const key = process.env.GEMINI_API_KEY?.trim();
+  return Boolean(key && key.length >= 20);
+}
+
 function getGenAI(): GoogleGenAI {
+  if (!hasGeminiApiKey()) {
+    throw new Error(
+      "خدمة Gemini غير مفعّلة. أضف مفتاح GEMINI_API_KEY صالحاً في ملف .env ثم أعد تشغيل الخادم."
+    );
+  }
+
   if (!genAIClient) {
     const key = process.env.GEMINI_API_KEY;
     genAIClient = new GoogleGenAI({
@@ -474,9 +852,720 @@ app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     app: "FGOM21 AI",
-    hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+    hasGeminiKey: hasGeminiApiKey(),
     hasCloudflareKey: Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID),
   });
+});
+
+app.get("/api/platform/config", (_req, res) => {
+  res.json({
+    authConfigured: Boolean(
+      (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL) &&
+        process.env.VITE_SUPABASE_URL &&
+        process.env.VITE_SUPABASE_ANON_KEY
+    ),
+    storageConfigured: Boolean(
+      getPlatformAdmin() && getCredentialEncryptionKey()
+    ),
+  });
+});
+
+// The customer authenticates with the provider on its own consent page.  The
+// application never asks the customer to paste an access token into our UI.
+app.post("/api/platform/oauth/:provider/start", arcjetSecurityMiddleware, async (req, res) => {
+  try {
+    const providerValue = req.params.provider;
+    if (!isOAuthProvider(providerValue)) {
+      return res.status(400).json({ error: "خدمة الربط غير مدعومة." });
+    }
+
+    const auth = await authenticatePlatformUser(req, res);
+    if (!auth) return;
+
+    const provider = providerValue;
+    const config = getOAuthConfig(provider);
+    if (!config) {
+      return res.status(503).json({
+        error: `ربط ${provider} غير مهيأ لدى المنصة بعد.`,
+        code: "OAUTH_PROVIDER_NOT_CONFIGURED",
+      });
+    }
+
+    const state = toBase64Url(randomBytes(32));
+    const { codeVerifier, codeChallenge } = createPkcePair();
+    pendingOAuthConnections.set(state, {
+      userId: auth.userId,
+      provider,
+      codeVerifier,
+      createdAt: Date.now(),
+    });
+
+    const callbackUrl = `${getAppUrl(req)}/api/platform/oauth/${provider}/callback`;
+    const params = new URLSearchParams({
+      client_id: config.clientId,
+      redirect_uri: callbackUrl,
+      response_type: "code",
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+    });
+    if (config.scope) params.set("scope", config.scope);
+    if (provider === "vercel") params.set("nonce", toBase64Url(randomBytes(24)));
+
+    res.json({ authorizationUrl: `${config.authorizeUrl}?${params.toString()}` });
+  } catch (error) {
+    console.error("Could not start provider OAuth connection:", error);
+    res.status(500).json({ error: "تعذر بدء تسجيل الدخول إلى الخدمة." });
+  }
+});
+
+app.get("/api/platform/oauth/:provider/callback", async (req, res) => {
+  const providerValue = req.params.provider;
+  const appUrl = getAppUrl(req);
+  const completeUrl = new URL(`${appUrl}/`);
+  completeUrl.searchParams.set("integration", providerValue);
+
+  try {
+    if (!isOAuthProvider(providerValue)) throw new Error("خدمة الربط غير مدعومة.");
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    const providerError = typeof req.query.error === "string" ? req.query.error : "";
+    const pending = pendingOAuthConnections.get(state);
+    pendingOAuthConnections.delete(state);
+
+    if (providerError) throw new Error("تم إلغاء الموافقة على الربط.");
+    if (!code || !pending || pending.provider !== providerValue) {
+      throw new Error("انتهت جلسة الربط أو أنها غير صالحة. أعد المحاولة.");
+    }
+    if (Date.now() - pending.createdAt > OAUTH_CONNECTION_TTL_MS) {
+      throw new Error("انتهت مهلة تسجيل الدخول. أعد المحاولة.");
+    }
+
+    const config = getOAuthConfig(providerValue);
+    const admin = getPlatformAdmin();
+    if (!config || !admin || !getCredentialEncryptionKey()) {
+      throw new Error("إعدادات الربط في الخادم غير مكتملة.");
+    }
+
+    const callbackUrl = `${appUrl}/api/platform/oauth/${providerValue}/callback`;
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: callbackUrl,
+      code_verifier: pending.codeVerifier,
+    });
+    if (providerValue !== "supabase") {
+      body.set("client_id", config.clientId);
+      body.set("client_secret", config.clientSecret);
+    }
+
+    const tokenResponse = await fetch(config.tokenUrl, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...(providerValue === "supabase"
+          ? { Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}` }
+          : {}),
+      },
+      body,
+    });
+    const tokenData = (await tokenResponse.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!tokenResponse.ok || typeof tokenData.access_token !== "string") {
+      throw new Error("تعذر إتمام موافقة الخدمة. أعد المحاولة.");
+    }
+
+    let label = providerValue === "github" ? "GitHub" : providerValue === "vercel" ? "Vercel" : "Supabase";
+    if (providerValue === "github") {
+      const profileResponse = await fetch("https://api.github.com/user", {
+        headers: { Authorization: `Bearer ${tokenData.access_token}`, "User-Agent": "FGOM21-AI" },
+      });
+      const profile = (await profileResponse.json().catch(() => ({}))) as { login?: string };
+      if (profile.login) label = `GitHub: ${profile.login}`;
+    }
+
+    const encryptedSecret = encryptProviderSecret(
+      JSON.stringify({
+        accessToken: tokenData.access_token,
+        refreshToken: tokenData.refresh_token || null,
+        expiresIn: tokenData.expires_in || null,
+        scope: tokenData.scope || null,
+      })
+    );
+    const { error } = await admin.from("provider_connections").upsert(
+      {
+        user_id: pending.userId,
+        provider: providerValue,
+        label,
+        encrypted_secret: encryptedSecret,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,provider,label" }
+    );
+    if (error) throw error;
+
+    completeUrl.searchParams.set("status", "connected");
+  } catch (error) {
+    completeUrl.searchParams.set("status", "error");
+    completeUrl.searchParams.set("message", error instanceof Error ? error.message : "تعذر إكمال الربط.");
+  }
+
+  res.redirect(303, completeUrl.toString());
+});
+
+app.get("/api/platform/connections", arcjetSecurityMiddleware, async (req, res) => {
+  try {
+    const auth = await authenticatePlatformUser(req, res);
+    if (!auth) return;
+
+    const { data, error } = await auth.admin
+      .from("provider_connections")
+      .select("id, provider, label, created_at, updated_at")
+      .eq("user_id", auth.userId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    res.json({ connections: data || [] });
+  } catch (error) {
+    console.error("Could not load provider connections:", error);
+    res.status(500).json({ error: "تعذر تحميل الحسابات المرتبطة." });
+  }
+});
+
+app.post("/api/platform/connections", arcjetSecurityMiddleware, async (req, res) => {
+  try {
+    const auth = await authenticatePlatformUser(req, res);
+    if (!auth) return;
+
+    const provider = typeof req.body?.provider === "string" ? req.body.provider : "";
+    const label = typeof req.body?.label === "string" ? req.body.label.trim() : "";
+    const secret = typeof req.body?.secret === "string" ? req.body.secret.trim() : "";
+
+    if (!PLATFORM_PROVIDERS.has(provider)) {
+      return res.status(400).json({ error: "منصة الربط غير مدعومة." });
+    }
+    if (!label || label.length > 80) {
+      return res.status(400).json({ error: "أدخل اسماً واضحاً للحساب، بحد أقصى 80 حرفاً." });
+    }
+    if (secret.length < 12 || secret.length > 8192) {
+      return res.status(400).json({ error: "بيانات الربط غير صالحة أو تجاوزت الحد المسموح." });
+    }
+
+    const encryptedSecret = encryptProviderSecret(secret);
+    const { data, error } = await auth.admin
+      .from("provider_connections")
+      .upsert(
+        {
+          user_id: auth.userId,
+          provider,
+          label,
+          encrypted_secret: encryptedSecret,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id,provider,label" }
+      )
+      .select("id, provider, label, created_at, updated_at")
+      .single();
+
+    if (error) throw error;
+    res.status(201).json({ connection: data });
+  } catch (error) {
+    console.error("Could not save provider connection:", error);
+    res.status(500).json({ error: "تعذر حفظ الربط. تحقق من إعدادات قاعدة بيانات المنصة." });
+  }
+});
+
+app.delete("/api/platform/connections/:connectionId", arcjetSecurityMiddleware, async (req, res) => {
+  try {
+    const auth = await authenticatePlatformUser(req, res);
+    if (!auth) return;
+    if (!/^[0-9a-f-]{36}$/i.test(req.params.connectionId)) {
+      return res.status(400).json({ error: "معرّف الربط غير صالح." });
+    }
+
+    const { error } = await auth.admin
+      .from("provider_connections")
+      .delete()
+      .eq("id", req.params.connectionId)
+      .eq("user_id", auth.userId);
+
+    if (error) throw error;
+    res.status(204).end();
+  } catch (error) {
+    console.error("Could not remove provider connection:", error);
+    res.status(500).json({ error: "تعذر حذف الربط." });
+  }
+});
+
+app.get("/api/platform/github/repositories", arcjetSecurityMiddleware, async (req, res) => {
+  try {
+    const auth = await authenticatePlatformUser(req, res);
+    if (!auth) return;
+
+    const { data: connection, error } = await auth.admin
+      .from("provider_connections")
+      .select("encrypted_secret")
+      .eq("user_id", auth.userId)
+      .eq("provider", "github")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (!connection) {
+      return res.status(409).json({ error: "اربط حساب GitHub أولاً ثم اختر المستودع." });
+    }
+
+    const credential = JSON.parse(decryptProviderSecret(connection.encrypted_secret)) as {
+      accessToken?: string;
+    };
+    if (!credential.accessToken) throw new Error("بيانات ربط GitHub غير صالحة.");
+
+    const githubResponse = await fetch(
+      "https://api.github.com/user/repos?affiliation=owner,collaborator&sort=updated&per_page=100",
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${credential.accessToken}`,
+          "User-Agent": "FGOM21-AI",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      }
+    );
+    const payload = (await githubResponse.json().catch(() => ({}))) as any;
+    if (!githubResponse.ok || !Array.isArray(payload)) {
+      return res.status(502).json({ error: "تعذر قراءة مستودعات GitHub المرتبطة بهذا الحساب." });
+    }
+
+    res.json({
+      repositories: payload.map((repo: any) => ({
+        id: repo.id,
+        name: repo.name,
+        fullName: repo.full_name,
+        url: repo.html_url,
+        branch: repo.default_branch || "main",
+        isPrivate: Boolean(repo.private),
+      })),
+    });
+  } catch (error) {
+    console.error("Could not load connected GitHub repositories:", error);
+    res.status(500).json({ error: "تعذر تحميل مستودعات GitHub." });
+  }
+});
+
+app.get("/api/platform/projects", arcjetSecurityMiddleware, async (req, res) => {
+  try {
+    const auth = await authenticatePlatformUser(req, res);
+    if (!auth) return;
+
+    const { data, error } = await auth.admin
+      .from("deployment_projects")
+      .select("id, name, repository_url, branch, created_at, updated_at")
+      .eq("user_id", auth.userId)
+      .order("updated_at", { ascending: false });
+
+    if (error) throw error;
+    res.json({ projects: data || [] });
+  } catch (error) {
+    console.error("Could not load deployment projects:", error);
+    res.status(500).json({ error: "تعذر تحميل المشاريع." });
+  }
+});
+
+app.post("/api/platform/projects", arcjetSecurityMiddleware, async (req, res) => {
+  try {
+    const auth = await authenticatePlatformUser(req, res);
+    if (!auth) return;
+
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const branch = typeof req.body?.branch === "string" ? req.body.branch.trim() : "main";
+    const repositoryUrl =
+      typeof req.body?.repositoryUrl === "string" ? req.body.repositoryUrl.trim() : "";
+    let parsedRepository: URL;
+
+    try {
+      parsedRepository = new URL(repositoryUrl);
+    } catch {
+      return res.status(400).json({ error: "أدخل رابط مستودع GitHub صالحاً." });
+    }
+
+    const repositoryParts = parsedRepository.pathname
+      .replace(/\.git$/i, "")
+      .split("/")
+      .filter(Boolean);
+    if (
+      parsedRepository.protocol !== "https:" ||
+      parsedRepository.hostname !== "github.com" ||
+      repositoryParts.length !== 2
+    ) {
+      return res.status(400).json({ error: "يجب أن يكون الرابط لمستودع GitHub بصيغة owner/repository." });
+    }
+    if (!name || name.length > 100 || !/^[\w./-]{1,120}$/.test(branch)) {
+      return res.status(400).json({ error: "اسم المشروع أو الفرع غير صالح." });
+    }
+
+    const normalizedRepositoryUrl = `https://github.com/${repositoryParts.join("/")}`;
+    const { data, error } = await auth.admin
+      .from("deployment_projects")
+      .insert({
+        user_id: auth.userId,
+        name,
+        repository_url: normalizedRepositoryUrl,
+        branch,
+      })
+      .select("id, name, repository_url, branch, created_at, updated_at")
+      .single();
+
+    if (error) throw error;
+    res.status(201).json({ project: data });
+  } catch (error) {
+    console.error("Could not save deployment project:", error);
+    res.status(500).json({ error: "تعذر حفظ المشروع." });
+  }
+});
+
+app.get("/api/hosting/config", (_req, res) => {
+  let publicUrlConfigured = false;
+  try {
+    const publicUrl = new URL(process.env.APP_URL || "");
+    publicUrlConfigured = publicUrl.protocol === "https:";
+  } catch {
+    publicUrlConfigured = false;
+  }
+  res.json({
+    netlifyConfigured: Boolean(process.env.NETLIFY_ACCESS_TOKEN?.trim()),
+    publicUrlConfigured,
+  });
+});
+
+app.post("/api/hosting/deploy", arcjetSecurityMiddleware, async (req, res) => {
+  let createdSiteId = "";
+  const suppliedToken = typeof req.body?.token === "string" ? req.body.token.trim() : "";
+  const token = suppliedToken || process.env.NETLIFY_ACCESS_TOKEN?.trim() || "";
+  if (!token) {
+    return res.status(503).json({
+      error: "أدخل مفتاح Netlify الخاص بك للمتابعة.",
+      code: "NETLIFY_NOT_CONFIGURED",
+    });
+  }
+  if (token.length < 20 || token.length > 500 || /[\r\n]/.test(token)) {
+    return res.status(400).json({ error: "مفتاح Netlify غير صالح. تحقق منه ثم أعد المحاولة." });
+  }
+
+  try {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const files = req.body?.files;
+    if (!name || name.length > 60 || !Array.isArray(files) || files.length === 0 || files.length > 100) {
+      return res.status(400).json({ error: "اسم الموقع أو قائمة الملفات غير صالحة." });
+    }
+
+    const staticExtensions = new Set([
+      "html", "htm", "css", "js", "mjs", "cjs", "json", "svg", "png", "jpg", "jpeg",
+      "webp", "avif", "gif", "ico", "woff", "woff2", "ttf", "otf", "txt", "xml",
+      "webmanifest", "pdf", "mp4", "mp3", "webm", "wasm", "map",
+    ]);
+    const archive = new JSZip();
+    const uniquePaths = new Set<string>();
+    let totalSize = 0;
+    for (const item of files) {
+      if (!item || typeof item !== "object") {
+        return res.status(400).json({ error: "قائمة الملفات تحتوي على إدخال غير صالح." });
+      }
+      const file = item as { path?: unknown; content?: unknown; encoding?: unknown };
+      if (
+        typeof file.path !== "string" ||
+        !isSafeHostedPath(file.path) ||
+        uniquePaths.has(file.path) ||
+        typeof file.content !== "string" ||
+        (file.encoding !== "utf8" && file.encoding !== "base64")
+      ) {
+        return res.status(400).json({ error: "أحد الملفات له مسار أو محتوى غير صالح." });
+      }
+      const extension = file.path.split("/").pop()?.split(".").pop()?.toLowerCase() || "";
+      if (!staticExtensions.has(extension)) {
+        return res.status(400).json({
+          error: `لا يمكن تشغيل ملفات .${extension || "بدون امتداد"} كاستضافة ثابتة. ارفع ناتج البناء الجاهز (HTML/CSS/JS)؛ الخوادم تحتاج منصة تشغيل منفصلة.`,
+        });
+      }
+      const bytes = file.encoding === "base64"
+        ? Buffer.from(file.content, "base64")
+        : Buffer.from(file.content, "utf8");
+      if (file.encoding === "base64" && (!/^[A-Za-z0-9+/]*={0,2}$/.test(file.content) || file.content.length % 4 !== 0)) {
+        return res.status(400).json({ error: "ترميز ملف ثنائي غير صالح." });
+      }
+      totalSize += bytes.byteLength;
+      if (totalSize > 15 * 1024 * 1024) {
+        return res.status(413).json({ error: "حجم الموقع يتجاوز الحد الأقصى البالغ 15 ميغابايت." });
+      }
+      uniquePaths.add(file.path);
+      archive.file(file.path, bytes);
+    }
+    if (!uniquePaths.has("index.html") && !uniquePaths.has("index.htm")) {
+      return res.status(400).json({ error: "يجب أن يحتوي المجلد الرئيسي للموقع على index.html." });
+    }
+
+    let analyticsOrigin: string | null = null;
+    try {
+      const appOrigin = new URL(getAppUrl(req));
+      if (appOrigin.protocol === "https:") analyticsOrigin = appOrigin.origin;
+    } catch {
+      analyticsOrigin = null;
+    }
+    const siteName = `${name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 35) || "fgom-site"}-${randomUUID().slice(0, 6)}`;
+    const authHeaders = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+    const siteResponse = await fetch("https://api.netlify.com/api/v1/sites", {
+      method: "POST",
+      headers: { ...authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: siteName }),
+    });
+    const siteData = await siteResponse.json().catch(() => ({})) as {
+      id?: string; ssl_url?: string; error_message?: string; message?: string;
+    };
+    if (!siteResponse.ok || !siteData.id) {
+      const status = siteResponse.status === 401 || siteResponse.status === 403 ? 401 : 502;
+      return res.status(status).json({
+        error: status === 401 ? "رفض Netlify المفتاح. تحقق من صلاحيته وصلاحياته." : "تعذر إنشاء الموقع في Netlify.",
+      });
+    }
+    createdSiteId = siteData.id;
+
+    const indexPath = uniquePaths.has("index.html") ? "index.html" : "index.htm";
+    const indexFile = files.find((item: { path: string }) => item.path === indexPath) as {
+      path: string; content: string; encoding: "utf8" | "base64";
+    };
+    if (indexFile.encoding !== "utf8") {
+      throw new Error("ملف index.html يجب أن يكون نصاً.");
+    }
+    const encodedSiteId = JSON.stringify(siteData.id).replace(/</g, "\\u003c");
+    if (analyticsOrigin) {
+      const encodedOrigin = JSON.stringify(analyticsOrigin).replace(/</g, "\\u003c");
+      const tracker = `<script>(function(){try{var k="fgom21-analytics-"+${encodedSiteId};if(sessionStorage.getItem(k))return;fetch(${encodedOrigin}+"/api/hosting/analytics/track",{method:"POST",headers:{"Content-Type":"text/plain;charset=UTF-8"},body:JSON.stringify({siteId:${encodedSiteId}})}).then(function(r){if(r.ok)sessionStorage.setItem(k,"1")}).catch(function(){})}catch(_){}})();</script>`;
+      indexFile.content = indexFile.content.replace(/<\/body\s*>/i, `${tracker}</body>`);
+      if (!/<\/body\s*>/i.test(indexFile.content)) indexFile.content += tracker;
+    }
+    archive.file(indexPath, indexFile.content);
+
+    const zipBuffer = await archive.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
+    const deployResponse = await fetch(`https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteData.id)}/deploys`, {
+      method: "POST",
+      headers: { ...authHeaders, "Content-Type": "application/zip" },
+      body: new Uint8Array(zipBuffer),
+    });
+    let deployData = await deployResponse.json().catch(() => ({})) as {
+      id?: string; state?: string; ssl_url?: string; deploy_ssl_url?: string; error_message?: string;
+    };
+    if (!deployResponse.ok || !deployData.id) {
+      throw new Error(deployResponse.status === 401 || deployResponse.status === 403
+        ? "رفض Netlify رفع ملفات الموقع. راجع صلاحيات المفتاح."
+        : "أنشأ Netlify مساحة الموقع لكن تعذر رفع الملفات. لن يُعرض رابط نشر غير مؤكد.");
+    }
+
+    const deadline = Date.now() + 30_000;
+    while (deployData.state !== "ready" && Date.now() < deadline) {
+      if (deployData.state === "error") throw new Error("فشل Netlify في تجهيز الموقع. راجع قيود الحساب ثم أعد المحاولة.");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const statusResponse = await fetch(`https://api.netlify.com/api/v1/deploys/${encodeURIComponent(deployData.id)}`, {
+        headers: authHeaders,
+      });
+      if (!statusResponse.ok) throw new Error("تعذر التحقق من حالة نشر Netlify.");
+      deployData = await statusResponse.json() as typeof deployData;
+    }
+    if (deployData.state !== "ready") throw new Error("ما زال Netlify يجهز النشر؛ لم يتم تأكيد الرابط بعد.");
+
+    const url = deployData.ssl_url || deployData.deploy_ssl_url || siteData.ssl_url;
+    if (!url || !url.startsWith("https://")) {
+      throw new Error("أكد Netlify اكتمال النشر لكن لم يُرجع رابط HTTPS صالحاً.");
+    }
+
+    const analyticsKey = randomBytes(32).toString("base64url");
+    try {
+      const storedSites = loadPublishedSites();
+      storedSites[siteData.id] = {
+        ownerKeyHash: createHash("sha256").update(analyticsKey).digest("hex"),
+        name,
+        url,
+        visits: 0,
+        createdAt: new Date().toISOString(),
+      };
+      savePublishedSites(storedSites);
+      return res.status(201).json({
+        siteId: siteData.id,
+        name,
+        url,
+        analyticsKey,
+        visits: 0,
+        ...(!analyticsOrigin ? { warning: "تم النشر بنجاح. عداد الزيارات يحتاج إعداد رابط HTTPS العام للمنصة." } : {}),
+      });
+    } catch (error) {
+      console.error("Site deployed, but analytics could not be saved:", error);
+      return res.status(201).json({
+        siteId: siteData.id,
+        name,
+        url,
+        visits: null,
+        warning: "تم النشر، لكن تعذر حفظ بيانات لوحة الزيارات على هذا الخادم.",
+      });
+    }
+  } catch (error) {
+    if (createdSiteId) {
+      try {
+        await fetch(`https://api.netlify.com/api/v1/sites/${encodeURIComponent(createdSiteId)}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch (cleanupError) {
+        console.error("Could not remove incomplete Netlify site:", cleanupError);
+      }
+    }
+    console.error("Netlify deployment failed:", error);
+    res.status(502).json({
+      error: error instanceof Error ? error.message : "تعذر إكمال النشر عبر Netlify.",
+    });
+  }
+});
+
+app.post(
+  "/api/hosting/analytics/track",
+  express.text({ type: "text/plain", limit: "1kb" }),
+  arcjetSecurityMiddleware,
+  (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "no-store");
+  let body = req.body as unknown;
+  if (typeof body === "string") {
+    try {
+      body = JSON.parse(body) as unknown;
+    } catch {
+      return res.status(400).json({ error: "بيانات الزيارة غير صالحة." });
+    }
+  }
+  const siteId = body && typeof body === "object" && "siteId" in body && typeof body.siteId === "string"
+    ? body.siteId
+    : "";
+  if (!/^[a-zA-Z0-9-]{1,100}$/.test(siteId)) return res.status(400).json({ error: "معرف الموقع غير صالح." });
+  try {
+    const sites = loadPublishedSites();
+    const site = sites[siteId];
+    if (!site) return res.status(404).json({ error: "الموقع غير مسجل للتحليلات." });
+    site.visits += 1;
+    savePublishedSites(sites);
+    res.status(204).end();
+  } catch (error) {
+    console.error("Could not record published site visit:", error);
+    res.status(500).json({ error: "تعذر تسجيل الزيارة." });
+  }
+  }
+);
+
+app.get("/api/hosting/analytics/public", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const sites = loadPublishedSites();
+    const publicSites = Object.entries(sites).map(([siteId, site]) => ({
+      siteId,
+      name: site.name,
+      url: site.url,
+      visits: Number.isSafeInteger(site.visits) && site.visits > 0 ? site.visits : 0,
+      createdAt: site.createdAt,
+    }));
+    const totalVisits = publicSites.reduce((total, site) => total + site.visits, 0);
+    res.json({ stats: { siteCount: publicSites.length, totalVisits, sites: publicSites } });
+  } catch (error) {
+    console.error("Could not read public hosting analytics:", error);
+    res.status(500).json({ error: "تعذر تحميل الإحصاءات العامة." });
+  }
+});
+
+app.get("/api/hosting/analytics/dashboard/:siteId", arcjetSecurityMiddleware, (req, res) => {
+  const dashboardKey = req.header("x-dashboard-key") || "";
+  if (dashboardKey.length < 32 || dashboardKey.length > 200) {
+    return res.status(401).json({ error: "مفتاح لوحة الزيارات غير صالح." });
+  }
+  try {
+    const sites = loadPublishedSites();
+    const site = sites[req.params.siteId];
+    if (!site) return res.status(404).json({ error: "لم يتم العثور على إحصاءات هذا الموقع." });
+    const suppliedHash = createHash("sha256").update(dashboardKey).digest();
+    const storedHash = Buffer.from(site.ownerKeyHash, "hex");
+    if (storedHash.length !== suppliedHash.length || !timingSafeEqual(suppliedHash, storedHash)) {
+      return res.status(403).json({ error: "مفتاح لوحة الزيارات غير صحيح." });
+    }
+    res.json({ site: { name: site.name, url: site.url, visits: site.visits, createdAt: site.createdAt } });
+  } catch (error) {
+    console.error("Could not read published site analytics:", error);
+    res.status(500).json({ error: "تعذر تحميل إحصاءات الموقع." });
+  }
+});
+
+// ✉️ Direct Support Ticket System Endpoint (Destination: fgom900@gmail.com)
+app.post("/api/support/ticket", arcjetSecurityMiddleware, async (req, res) => {
+  try {
+    const { name, email, subject, message } = req.body;
+
+    if (!message || typeof message !== "string" || !message.trim()) {
+      return res.status(400).json({ ok: false, error: "تفاصيل الرسالة مطلوبة لاكتكال التذكرة." });
+    }
+
+    if (!email || typeof email !== "string" || !/^\S+@\S+\.\S+$/.test(email.trim())) {
+      return res.status(400).json({ ok: false, error: "أدخل بريدًا إلكترونيًا صالحًا للرد على طلبك." });
+    }
+
+    const ticketId = "TKT-" + Date.now().toString().slice(-6) + "-" + Math.floor(100 + Math.random() * 900);
+    const timestamp = new Date().toLocaleString("ar-SA", { timeZone: "Asia/Riyadh" });
+
+    const ticketData = {
+      id: ticketId,
+      destination: "fgom900@gmail.com",
+      senderName: (name && typeof name === "string" && name.trim()) ? name.trim() : "مستخدم المنصة",
+      senderEmail: (email && typeof email === "string" && email.trim()) ? email.trim() : "غير محدد",
+      subject: (subject && typeof subject === "string" && subject.trim()) ? subject.trim() : "استفسار وتذكرة دعم فني",
+      message: message.trim(),
+      timestamp,
+      app: "FGOM21 AI Platform",
+    };
+
+    const formspreeResponse = await fetch(FORMSPREE_SUPPORT_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        name: ticketData.senderName,
+        email: ticketData.senderEmail,
+        subject: ticketData.subject,
+        message: ticketData.message,
+        ticketId: ticketData.id,
+        submittedAt: ticketData.timestamp,
+        _subject: `[FGOM21 AI] ${ticketData.subject} — ${ticketData.id}`,
+      }),
+    });
+
+    if (!formspreeResponse.ok) {
+      const detail = await formspreeResponse.json().catch(() => ({})) as any;
+      console.error("Formspree support submission failed:", detail);
+      return res.status(502).json({ ok: false, error: "تعذر إرسال تذكرة الدعم حاليًا. يرجى المحاولة لاحقًا." });
+    }
+
+    console.log("\n========================================================");
+    console.log(`📩 [NEW SUPPORT TICKET RECEIVED FOR fgom900@gmail.com]`);
+    console.log(`🎫 Ticket ID : ${ticketData.id}`);
+    console.log(`👤 Sender    : ${ticketData.senderName} (${ticketData.senderEmail})`);
+    console.log(`📌 Subject   : ${ticketData.subject}`);
+    console.log(`⏰ Time      : ${ticketData.timestamp}`);
+    console.log(`📝 Message   :\n${ticketData.message}`);
+    console.log("========================================================\n");
+
+    return res.json({
+      ok: true,
+      ticketId: ticketData.id,
+      destination: "fgom900@gmail.com",
+      message: "تم تسليم تذكرتك بنجاح وتوجيهها مباشرة إلى فريق الدعم المباشر.",
+      timestamp: ticketData.timestamp,
+    });
+  } catch (err: any) {
+    console.error("Error handling support ticket:", err);
+    return res.status(500).json({ ok: false, error: "حدث خطأ أثناء معالجة التذكرة. يرجى المحاولة لاحقاً." });
+  }
 });
 
 // Test API Key Endpoint
@@ -618,7 +1707,7 @@ app.post("/api/analyze-files", async (req, res) => {
     }
 
     const filesContext = files
-      .slice(0, 5)
+      .slice(0, 50)
       .map(
         (f: any, idx: number) =>
           `=== ملف [${idx + 1}]: ${f.name} (${f.type || "code"}) ===\n${f.content || ""}\n`
@@ -931,13 +2020,28 @@ app.post("/api/agent/plan", async (req, res) => {
 });
 
 // Non-streaming chat endpoint
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", arcjetSecurityMiddleware, async (req, res) => {
   try {
-    const { messages = [], model = "llama-3.1-8b", developerMode = false, files = [] } = req.body;
+    const { messages = [], model = "llama-3.1-8b", developerMode = false, files = [], provider = "builtin", apiKey = "" } = req.body;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "الرسائل مطلوبة لبدء المحادثة." });
     }
+
+    const quota = consumeFreeRequest(
+      req,
+      res,
+      provider !== "builtin" && typeof apiKey === "string" && apiKey.trim().length > 0
+    );
+    if (!quota.allowed) {
+      const resetAt = new Date(quota.resetAt!).toLocaleString("ar-SA", { timeZone: "Asia/Riyadh" });
+      return res.status(429).json({
+        code: "FREE_REQUEST_LIMIT_REACHED",
+        resetAt: quota.resetAt,
+        error: `استهلكت 25 طلبًا مجانيًا. ستتجدد طلباتك في ${resetAt}. أضف مفتاح API الخاص بك للاستخدام بلا حد داخل المنصة.`,
+      });
+    }
+    res.setHeader("X-FGOM-Requests-Remaining", String(quota.remaining));
 
     const systemPrompt = buildSystemPrompt(model, Boolean(developerMode), files?.length || 0);
     const selectedModel = MODELS.find((m) => m.id === model) || MODELS[0];
@@ -948,7 +2052,7 @@ app.post("/api/chat", async (req, res) => {
       filesContext =
         "\n\n📂 [الملفات المرفقة من المشروع]:\n" +
         files
-          .slice(0, 5)
+          .slice(0, 50)
           .map(
             (f: any, idx: number) =>
               `=== الملف (${idx + 1}/${files.length}): ${f.name} ===\n\`\`\`${f.type || ""}\n${f.content || ""}\n\`\`\``
@@ -987,13 +2091,34 @@ app.post("/api/chat", async (req, res) => {
       const msg = messages[i];
       const isLast = i === messages.length - 1;
       let text = msg.content;
-      if (isLast && msg.role === "user" && filesContext) {
-        text = `${filesContext}\n\n${text}`;
+      const parts: any[] = [];
+
+      if (isLast && msg.role === "user") {
+        if (filesContext) {
+          text = `${filesContext}\n\n${text}`;
+        }
+
+        // Send reference images as native Gemini vision inputs, rather than
+        // merely naming them in the prompt.
+        if (Array.isArray(files)) {
+          for (const file of files) {
+            if (file.dataUrl && typeof file.dataUrl === "string" && file.dataUrl.includes(",")) {
+              const data = file.dataUrl.split(",")[1];
+              const mimeType =
+                file.mimeType || file.dataUrl.match(/data:([^;]+);/)?.[1] || "image/png";
+
+              if (data) {
+                parts.push({ inlineData: { mimeType, data } });
+              }
+            }
+          }
+        }
       }
 
+      parts.push({ text });
       contents.push({
         role: msg.role === "assistant" ? "model" : "user",
-        parts: [{ text }],
+        parts,
       });
     }
 
@@ -1019,7 +2144,7 @@ app.post("/api/chat", async (req, res) => {
 });
 
 // Streaming Chat Endpoint via SSE
-app.post("/api/chat/stream", async (req, res) => {
+app.post("/api/chat/stream", arcjetSecurityMiddleware, async (req, res) => {
   try {
     const {
       messages = [],
@@ -1036,6 +2161,21 @@ app.post("/api/chat/stream", async (req, res) => {
       return res.status(400).json({ error: "الرسائل مطلوبة لبدء المحادثة." });
     }
 
+    const quota = consumeFreeRequest(
+      req,
+      res,
+      provider !== "builtin" && typeof apiKey === "string" && apiKey.trim().length > 0
+    );
+    if (!quota.allowed) {
+      const resetAt = new Date(quota.resetAt!).toLocaleString("ar-SA", { timeZone: "Asia/Riyadh" });
+      return res.status(429).json({
+        code: "FREE_REQUEST_LIMIT_REACHED",
+        resetAt: quota.resetAt,
+        error: `استهلكت 25 طلبًا مجانيًا. ستتجدد طلباتك في ${resetAt}. أضف مفتاح API الخاص بك للاستخدام بلا حد داخل المنصة.`,
+      });
+    }
+    res.setHeader("X-FGOM-Requests-Remaining", String(quota.remaining));
+
     const systemPrompt = buildSystemPrompt(model, Boolean(developerMode), files?.length || 0);
     const selectedModel = MODELS.find((m) => m.id === model) || MODELS[0];
 
@@ -1051,7 +2191,7 @@ app.post("/api/chat/stream", async (req, res) => {
       filesContext =
         "\n\n📂 [الملفات المرفقة من المشروع]:\n" +
         files
-          .slice(0, 5)
+          .slice(0, 50)
           .map(
             (f: any, idx: number) =>
               `=== الملف (${idx + 1}/${files.length}): ${f.name} ===\n\`\`\`${f.type || ""}\n${f.content || ""}\n\`\`\``
@@ -1325,24 +2465,47 @@ app.post("/api/chat/stream", async (req, res) => {
   }
 });
 
-// Vite middleware setup
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    error: "مسار API غير موجود في الخادم الحالي. أوقف نسخة FGOM21 القديمة ثم شغّل أحدث نسخة عبر npm run dev.",
+    code: "API_ROUTE_NOT_FOUND",
+  });
+});
+
+// Vite middleware or Static Bundle setup
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
+  const distPath = path.join(process.cwd(), "dist");
+  // `npm run dev` runs this source file through tsx.  A previous version
+  // served /dist whenever it existed, which meant development always showed
+  // an outdated bundle instead of the files currently being edited.
+  const isProductionBundle =
+    process.env.NODE_ENV === "production" ||
+    /[\\/]dist[\\/]server\.cjs$/i.test(process.argv[1] || "");
+
+  if (
+    isProductionBundle &&
+    fs.existsSync(distPath) &&
+    fs.existsSync(path.join(distPath, "index.html"))
+  ) {
+    console.log("Serving production static bundle from /dist...");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
+  } else {
+    console.log("Starting Vite middleware server in DEV mode...");
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`FGOM21 AI Server running on http://0.0.0.0:${PORT}`);
+    console.log(`FGOM21 AI Server running on http://localhost:${PORT} and http://0.0.0.0:${PORT}`);
   });
 }
 
