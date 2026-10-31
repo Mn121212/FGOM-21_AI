@@ -4,7 +4,6 @@ import fs from "fs";
 import { createHash, randomUUID } from "crypto";
 import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
 import { timingSafeEqual } from "crypto";
-import { createServer as createViteServer } from "vite";
 import JSZip from "jszip";
 import { GoogleGenAI } from "@google/genai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -395,9 +394,8 @@ function getGenAI(): GoogleGenAI {
   }
 
   if (!genAIClient) {
-    const key = process.env.GEMINI_API_KEY;
+    // On Netlify, AI Gateway injects GEMINI_API_KEY and GOOGLE_GEMINI_BASE_URL at runtime.
     genAIClient = new GoogleGenAI({
-      apiKey: key || "",
       httpOptions: {
         headers: {
           "User-Agent": "aistudio-build",
@@ -2494,6 +2492,7 @@ async function startServer() {
     });
   } else {
     console.log("Starting Vite middleware server in DEV mode...");
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -2509,4 +2508,9 @@ async function startServer() {
   });
 }
 
-startServer();
+// Inside the Netlify Function the app is served by netlify/functions/api.mts.
+if (!(globalThis as any).__FGOM_SERVERLESS__) {
+  startServer();
+}
+
+export default app;
